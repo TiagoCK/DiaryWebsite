@@ -21,6 +21,63 @@ Other commands:
 - `npm run upload -- --dry-run` — preview a scan upload
 - `npm run upload -- --commit` — upload scans and seed the database
 
+## Signing in
+
+The diary is invite-only. Accounts exist **only** when you create them in
+Supabase → Authentication → Users, where you also set the password. The app has
+no sign-up form, no "create account" link, and no `signUp()` call anywhere.
+
+**One dashboard setting is load-bearing:** Authentication → Sign In / Providers
+→ Email → **"Allow new users to sign up" must be OFF**. The anon key ships to
+every browser, so while that toggle is on, anyone holding it can call `signUp()`
+and create an account no matter what the UI offers.
+
+No email is ever sent — no confirmations, no password resets — which keeps
+Supabase's rate-limited built-in SMTP out of the picture entirely. If you forget
+a password, reset it in the dashboard.
+
+### Roles
+
+Every user has a row in `profiles` with a role, created automatically by a
+trigger when you add them:
+
+| Role | Can |
+|---|---|
+| `reader` (default) | Read the diary |
+| `admin` | Read the diary, plus `/admin` to edit each page's `first_line` |
+
+Promote someone from `/admin` → People, which lists every account from
+Authentication → Users and lets you set a role even before their first sign-in.
+You can also edit the `role` cell directly in Table Editor → `profiles`.
+
+Note there is **no database trigger** creating profile rows. Supabase restricts
+DDL on the `auth` schema, so `create trigger ... on auth.users` fails. Instead
+the app creates a user's profile the first time it sees them
+(`ensureProfile()` in `src/lib/auth.js`), defaulting to `reader`, and the admin
+page can assign a role ahead of that.
+
+An admin cannot change their own role — with a single admin that would lock the
+role out of the app permanently, since nothing else can grant it.
+
+### How access is enforced
+
+Every read goes through the Next.js server using the service-role key, so the
+**server** is the security boundary, not RLS. RLS is still on (with no policies)
+for both `pages` and `profiles`, which is what makes it safe for the browser to
+hold a Supabase client for the login form — the anon key can't read a row.
+
+Two things in the code are deliberate and easy to undo by accident:
+
+- **`getUser()`, never `getSession()`, on the server.** `getSession()` decodes
+  the cookie and trusts it; `getUser()` revalidates against the auth server.
+- **The middleware is not the security boundary.** It refreshes sessions and
+  redirects politely. Every protected surface re-checks for itself —
+  `src/app/page.js`, `src/app/admin/page.js`, the server action in
+  `src/app/admin/actions.js` (server actions are publicly reachable endpoints,
+  so guarding the form's page guards nothing), and above all
+  `src/app/api/scan/[pageId]/route.js`, which serves the images.
+
+
 ## Where the pages come from
 
 `DIARY_SOURCE` in `.env.local` selects the backing store:
@@ -37,9 +94,10 @@ local data in that case would be more confusing than a loud failure. Set
 
 ## First-time Supabase setup
 
-1. **Run the migration.** Supabase dashboard → SQL Editor → New query. Paste
-   `supabase/migrations/0001_init.sql` and run it. This creates the `pages`
-   table and — importantly — enables row-level security on it.
+1. **Run the migrations.** Supabase dashboard → SQL Editor → New query. Paste
+   and run `supabase/migrations/0001_init.sql` (the `pages` table, with
+   row-level security), then `0002_auth.sql` (the `profiles` table, the
+   new-user trigger, and RLS on it).
 2. **Set the keys** in `.env.local`: `SUPABASE_URL` and
    `SUPABASE_SERVICE_ROLE_KEY`.
 3. **Upload the scans.** `npm run upload -- --dry-run` first to see the plan,
@@ -133,6 +191,12 @@ URLs are minted only for pages someone actually opens, and no storage key ever
 reaches the browser.
 
 ## Notes
+
+`SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_URL` must name the **same project**.
+The server uses the first and the browser uses the second, and when they drift
+the failure is silent and confusing: every server-side query works while every
+sign-in is rejected, because logins go to a project that has none of your data.
+`src/lib/supabase.js` now throws on a mismatch rather than letting it happen.
 
 Secrets go in `.env.local`, which is gitignored — never commit the service-role
 key. It bypasses RLS, so it must stay server-side and must never gain a

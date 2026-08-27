@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { DIARY_ID, DIARY_SOURCE, findLocalPage } from "@/lib/pages";
+import { getCurrentUser } from "@/lib/auth";
 
 const SCANS_DIR = path.join(process.cwd(), "images");
 
@@ -15,8 +16,19 @@ const SCANS_DIR = path.join(process.cwd(), "images");
  *   supabase  page number -> row -> signed Storage URL, redirected to
  *
  * Either way the caller just requests /api/scan/<pageId>.
+ *
+ * This route serves the actual diary images, which makes it the most important
+ * thing to protect. It checks the session itself rather than trusting the
+ * middleware: if the middleware were ever bypassed, this is the endpoint that
+ * would hand over the whole diary.
  */
 export async function GET(request, { params }) {
+  // 401 rather than a redirect -- the caller is an <img>, not a browser
+  // navigation, and a redirect to an HTML login page would just decode as a
+  // broken image.
+  const user = await getCurrentUser();
+  if (!user) return new Response("Unauthorized", { status: 401 });
+
   const { pageId: raw } = await params;
 
   // Reject anything that is not a plain positive integer before it can reach a

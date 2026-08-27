@@ -43,7 +43,7 @@ main {
   padding: 3rem 1.5rem 4rem;
 }
 
-h1 {
+h1, h2 {
   font-size: 2.5rem;
   font-weight: 600;
   letter-spacing: -0.02em;
@@ -240,4 +240,229 @@ h1 {
   .leaf {
     transition: none !important;
   }
+}
+
+/* ---------- top bar ---------- */
+
+.topbar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.topbar__title {
+  font-size: 2rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--foreground);
+  text-decoration: none;
+}
+
+.topbar__right {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  font-size: 0.85rem;
+}
+
+.topbar__user {
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.badge {
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.12rem 0.45rem;
+  border-radius: 3px;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+}
+
+.badge--admin {
+  color: var(--foreground);
+  border-color: var(--muted);
+}
+
+.topbar__link {
+  color: var(--foreground);
+  text-decoration: none;
+  border-bottom: 1px solid var(--rule);
+}
+
+.topbar__signout {
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--muted);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* ---------- login ---------- */
+
+.login {
+  max-width: 22rem;
+  margin: 4rem auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.login h1 {
+  font-size: 2rem;
+  margin: 0 0 0.25rem;
+  padding: 0;
+  border: none;
+}
+
+.login__note {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0 0 1rem;
+}
+
+.login label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-top: 0.5rem;
+}
+
+.login input {
+  font: inherit;
+  font-size: 0.95rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.login button {
+  font: inherit;
+  font-size: 0.95rem;
+  margin-top: 1.25rem;
+  padding: 0.55rem 1rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.login button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.login__error {
+  color: #b3261e;
+  font-size: 0.85rem;
+  margin: 0.75rem 0 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .login__error {
+    color: #f2b8b5;
+  }
+}
+
+/* ---------- admin ---------- */
+
+.admin h2 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  margin: 0 0 0.35rem;
+}
+
+.admin__note {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0 0 1.5rem;
+}
+
+.admin__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.admin__row form {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.admin__span {
+  flex: 0 0 8.5rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.admin__row input[type="text"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.admin__row button {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.admin__heading {
+  margin-top: 2.5rem;
+}
+
+.admin__person {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.admin__pending {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+.admin__self {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.admin__row select {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--foreground);
 }
