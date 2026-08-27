@@ -20,6 +20,18 @@ yarn-error.log*
 # env files (database URLs, API keys — never commit these)
 .env
 .env*.local
-
+.env.swp
+.env*.local*
 # vercel
 .vercel
+
+#images for now
+/images
+
+# diary scans — private content, served from disk, never committed
+/images
+
+# editor swap files (a .env.local.swp holds your env file's contents)
+*.swp
+*.swo
+*~

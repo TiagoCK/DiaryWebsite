@@ -3,6 +3,8 @@
   --foreground: #1c1b19;
   --muted: #6b6862;
   --rule: #e5e1d8;
+  --paper: #f4f1ea;
+  --shadow: rgba(0, 0, 0, 0.25);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -11,6 +13,8 @@
     --foreground: #eeece7;
     --muted: #9a968d;
     --rule: #34322d;
+    --paper: #23211d;
+    --shadow: rgba(0, 0, 0, 0.6);
   }
 }
 
@@ -34,21 +38,206 @@ body {
 }
 
 main {
-  max-width: 40rem;
+  max-width: 60rem;
   margin: 0 auto;
-  padding: 4rem 1.5rem;
+  padding: 3rem 1.5rem 4rem;
 }
 
 h1 {
   font-size: 2.5rem;
   font-weight: 600;
   letter-spacing: -0.02em;
-  margin: 0 0 1rem;
+  margin: 0 0 1.5rem;
   padding-bottom: 1rem;
   border-bottom: 1px solid var(--rule);
 }
 
-p {
+/* ---------- book ---------- */
+
+.viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+/*
+ * One fixed frame, sized from the widest view, so the book never changes
+ * shape between flips. Individual scans letterbox inside it.
+ * `perspective` is what makes the leaf rotate in depth instead of squashing.
+ */
+.book {
+  position: relative;
+  width: 100%;
+  aspect-ratio: var(--frame-aspect, 1.18);
+  background: var(--paper);
+  border-radius: 3px;
+  box-shadow: 0 10px 30px -12px var(--shadow);
+  perspective: 2000px;
+  overflow: hidden;
+}
+
+.slot {
+  position: absolute;
+  top: 0;
+  width: 50%;
+  height: 100%;
+}
+
+.slot--left {
+  left: 0;
+}
+
+.slot--right {
+  left: 50%;
+}
+
+.half {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--paper);
+}
+
+.half img {
+  display: block;
+  user-select: none;
+}
+
+/* A whole single page, letterboxed into its half of the frame. */
+.half--whole img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/*
+ * Half of a two-page spread. The image is laid out against the full frame
+ * width (200% of a half) and slid sideways, so both halves share identical
+ * sizing and rejoin seamlessly at the spine.
+ */
+.half--clip-left img,
+.half--clip-right img {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  width: 200%;
+  object-fit: contain;
+}
+
+.half--clip-left img {
+  left: 0;
+}
+
+.half--clip-right img {
+  left: -100%;
+}
+
+.half--blank {
+  position: absolute;
+  inset: 0;
+  background: var(--paper);
+}
+
+/* ---------- the turning leaf ---------- */
+
+.leaf {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 50%;
+  height: 100%;
+  transform-origin: left center;
+  transform-style: preserve-3d;
+  z-index: 2;
+  will-change: transform;
+}
+
+.leaf__face {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  overflow: hidden;
+  background: var(--paper);
+}
+
+/*
+ * The back of the leaf is the next left-hand page. It is pre-rotated so the
+ * browser reveals it automatically once the leaf passes vertical.
+ */
+.leaf__face--back {
+  transform: rotateY(180deg);
+}
+
+.spine {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 40px;
+  height: 100%;
+  margin-left: -20px;
+  z-index: 3;
+  pointer-events: none;
+  background: linear-gradient(
+    to right,
+    transparent,
+    rgba(0, 0, 0, 0.13),
+    rgba(0, 0, 0, 0.04),
+    rgba(0, 0, 0, 0.13),
+    transparent
+  );
+}
+
+/* ---------- controls ---------- */
+
+.controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.controls button {
+  font: inherit;
+  font-size: 0.95rem;
+  color: var(--foreground);
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.45rem 1rem;
+  cursor: pointer;
+}
+
+.controls button:hover:not(:disabled) {
+  background: var(--paper);
+}
+
+.controls button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.counter {
   color: var(--muted);
-  margin: 0;
+  font-size: 0.95rem;
+  text-align: center;
+}
+
+.counter__total {
+  opacity: 0.7;
+}
+
+/* Neighbour prefetch: fetched, never shown. */
+.preload {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .leaf {
+    transition: none !important;
+  }
 }
