@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { halfOf } from "@/lib/pages";
+import { halfOf } from "@/lib/views";
 
 const FLIP_MS = 600;
 
@@ -182,7 +182,7 @@ export default function BookViewer({ views, totalPages }) {
       <div className="preload" aria-hidden="true">
         {neighbours.flatMap((view) =>
           view.pages.map((page) => (
-            <img key={page.file} src={page.src} alt="" decoding="async" />
+            <img key={page.pageId} src={page.src} alt="" decoding="async" />
           ))
         )}
       </div>

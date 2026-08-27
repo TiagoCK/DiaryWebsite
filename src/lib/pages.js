@@ -2,30 +2,44 @@
  * Data access for diary pages.
  *
  * This module is the seam between the viewer and wherever the scans live.
- * Today that is a hardcoded manifest plus files on disk; next it will be a
- * Supabase `pages` table plus signed Storage URLs. Only the bodies of
- * getPages() and getPageImageUrl() change — the viewer never learns the
- * difference.
+ * Two sources are supported, chosen by the DIARY_SOURCE environment variable:
+ *
+ *   supabase (default)  page rows from Postgres, images from private Storage
+ *   local               the manifest below, images streamed from images/
+ *
+ * The switch is explicit rather than an automatic fallback: a Supabase free-tier
+ * project pauses after about a week of inactivity, and silently serving stale
+ * local data in that case would be far more confusing than a loud failure.
  */
 
 const SCAN_PREFIX = "1787802885506-91ca7dc4-4c02-4bfc-8f87-fb08cb631c08_";
 
+/** Which backing store to read from. */
+export const DIARY_SOURCE = process.env.DIARY_SOURCE === "local" ? "local" : "supabase";
+
+/** Diary volume. Multiple diaries share one table, keyed by (diary_id, page_id). */
+export const DIARY_ID = 1;
+
 /**
- * Ordered scans. Mirrors the future `pages` table one field at a time:
- *   pageId    -> page_id     first physical page number in this scan
- *   pageCount -> page_count  1 for a single page, 2 for an open spread
- *   width/height             DISPLAY dimensions, already EXIF-corrected
+ * The local scans, in order.
  *
- * Every scan here carries an EXIF orientation of 6 or 8, so its stored JPEG
- * dimensions are portrait and its displayed dimensions are landscape. The
- * numbers below are the displayed ones. Browsers rotate automatically; any
- * server-side image processing must call sharp().rotate() or three of these
- * spreads come out upside-down relative to the rest.
+ *   pageId    first physical page number this scan covers
+ *   pageCount 1 for a single page, 2 for an open spread
+ *   width     DISPLAY dimensions, already EXIF-corrected
+ *   height
+ *
+ * Every spread here carries an EXIF orientation of 6 or 8, so its stored JPEG
+ * dimensions are portrait while it displays landscape. The numbers below are
+ * the displayed ones. Browsers rotate automatically; anything server-side must
+ * call sharp().rotate() or three of these come out opposite the rest.
  *
  * Order is explicit rather than derived from filenames: both batches end in
  * digits, so sorting on the trailing number alone interleaves them.
+ *
+ * This doubles as the seed for scripts/upload.mjs -- it was verified against
+ * every file, so the upload reuses it rather than re-deriving it.
  */
-const MANIFEST = [
+export const MANIFEST = [
   { file: "pg1.jpg", pageId: 1, pageCount: 1, width: 553, height: 1024 },
   { file: "pg2.jpg", pageId: 2, pageCount: 1, width: 631, height: 1024 },
   { file: "pg3.jpg", pageId: 3, pageCount: 2, width: 1024, height: 878 },
@@ -42,102 +56,60 @@ const MANIFEST = [
   { file: `${SCAN_PREFIX}11.jpg`, pageId: 25, pageCount: 2, width: 1024, height: 903 },
 ];
 
-/** Filenames the scan route is allowed to serve. */
-export const ALLOWED_FILES = new Set(MANIFEST.map((p) => p.file));
+/** Storage object key for a page. Zero-padded so keys sort in reading order. */
+export function storageKeyFor(pageId, diaryId = DIARY_ID) {
+  return `diary${diaryId}/${String(pageId).padStart(4, "0")}.jpg`;
+}
 
-/** Ordered page records. Metadata only — no image bytes. */
-export async function getPages() {
-  return MANIFEST.map((p) => ({ ...p, src: getPageImageUrl(p) }));
+/** The local file backing a page number, or undefined. Used by the scan route. */
+export function findLocalPage(pageId) {
+  return MANIFEST.find((page) => page.pageId === pageId);
 }
 
 /**
- * URL for a page's image. Becomes a signed Supabase Storage URL later, which
- * is why callers must treat it as opaque and short-lived rather than caching it.
+ * URL for a page's image.
+ *
+ * Deliberately synchronous and deliberately not a storage URL. Minting a signed
+ * Supabase URL is async and the result expires, so returning one here would make
+ * buildViews() async and push changes up into the viewer. Routing through our
+ * own endpoint keeps this a pure function, mints signed URLs only for pages
+ * someone actually looks at, and keeps storage keys out of the browser.
  */
 export function getPageImageUrl(page) {
-  return `/api/scan/${encodeURIComponent(page.file)}`;
+  return `/api/scan/${page.pageId}`;
 }
 
-/**
- * Group ordered pages into views — one frame of the open book.
- *
- * A spread fills a view alone. Two consecutive single pages pair into one
- * view, left and right. A trailing unpaired single sits on the left with a
- * blank facing page.
- */
-export function buildViews(pages) {
-  const views = [];
-  let pending = null;
-
-  const push = (items) => {
-    const first = items[0].pageId;
-    const last = items[items.length - 1];
-    const lastNum = last.pageId + last.pageCount - 1;
-    views.push({
-      index: views.length,
-      pages: items,
-      label: first === lastNum ? `Page ${first}` : `Pages ${first}\u2013${lastNum}`,
-    });
-  };
-
-  for (const page of pages) {
-    if (page.pageCount === 1) {
-      if (pending) {
-        push([pending, page]);
-        pending = null;
-      } else {
-        pending = page;
-      }
-      continue;
-    }
-    if (pending) {
-      push([pending]);
-      pending = null;
-    }
-    push([page]);
-  }
-  if (pending) push([pending]);
-
-  return views;
+/** Ordered page records. Metadata only -- no image bytes. */
+export async function getPages() {
+  const rows = DIARY_SOURCE === "local" ? readLocalPages() : await readSupabasePages();
+  return rows.map((page) => ({ ...page, src: getPageImageUrl(page) }));
 }
 
-/**
- * One half of a view, described so the viewer can render it identically
- * whether it comes from half a spread or a whole single page.
- * Returns null for a blank facing page.
- */
-export function halfOf(view, side) {
-  if (!view) return null;
-  const { pages } = view;
-
-  if (pages.length === 2) {
-    const page = side === "left" ? pages[0] : pages[1];
-    return { page, clip: null };
-  }
-
-  const page = pages[0];
-  if (page.pageCount === 1) {
-    return side === "left" ? { page, clip: null } : null;
-  }
-  return { page, clip: side };
+function readLocalPages() {
+  return MANIFEST.map((page) => ({
+    pageId: page.pageId,
+    pageCount: page.pageCount,
+    width: page.width,
+    height: page.height,
+    firstLine: null,
+  }));
 }
 
-/**
- * Width-to-height ratio for the fixed book frame: the widest view, so every
- * scan letterboxes inside one frame that never changes size between flips.
- */
-export function frameAspect(views) {
-  let max = 1;
-  for (const view of views) {
-    const ratio = view.pages.reduce((sum, p) => sum + p.width / p.height, 0);
-    if (ratio > max) max = ratio;
-  }
-  return max;
-}
+async function readSupabasePages() {
+  const { getSupabase } = await import("./supabase.js");
+  const { data, error } = await getSupabase()
+    .from("pages")
+    .select("page_id, page_count, width, height, first_line")
+    .eq("diary_id", DIARY_ID)
+    .order("page_id", { ascending: true });
 
-/** Highest page number in the diary, for the "of N" counter. */
-export function totalPages(pages) {
-  if (pages.length === 0) return 0;
-  const last = pages[pages.length - 1];
-  return last.pageId + last.pageCount - 1;
+  if (error) throw new Error(`Could not read pages from Supabase: ${error.message}`);
+
+  return (data ?? []).map((row) => ({
+    pageId: row.page_id,
+    pageCount: row.page_count,
+    width: row.width,
+    height: row.height,
+    firstLine: row.first_line,
+  }));
 }
