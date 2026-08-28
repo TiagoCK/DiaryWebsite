@@ -18,8 +18,8 @@ Other commands:
 
 - `npm run build` — production build
 - `npm start` — serve the production build (run `build` first)
-- `npm run upload -- --dry-run` — preview a scan upload
-- `npm run upload -- --commit` — upload scans and seed the database
+- `npm run add` — preview adding new scans
+- `npm run add -- --commit` — add them
 
 ## Signing in
 
@@ -100,10 +100,7 @@ local data in that case would be more confusing than a loud failure. Set
    new-user trigger, and RLS on it).
 2. **Set the keys** in `.env.local`: `SUPABASE_URL` and
    `SUPABASE_SERVICE_ROLE_KEY`.
-3. **Upload the scans.** `npm run upload -- --dry-run` first to see the plan,
-   then `npm run upload -- --commit`. The script creates the private
-   `diary-scans` bucket if it doesn't exist, and refuses to run if the bucket
-   exists but is public.
+3. **Add the scans.** See below.
 
 ### Why row-level security matters here
 
@@ -118,6 +115,45 @@ Don't add a policy without deciding who it's for.
 
 The `diary-scans` bucket is private for the same reason: objects are reachable
 only through short-lived signed URLs minted server-side.
+
+## Adding pages
+
+Drop scans into `images/incoming/`, then:
+
+```bash
+npm run add
+```
+
+That prints the plan and changes nothing. Check the **single/spread** column —
+it decides the page numbering for everything added after it, and it is the one
+value that is awkward to correct later. Then:
+
+```bash
+npm run add -- --commit
+```
+
+Each scan is uploaded, its row inserted, and the original moved into `images/`
+alongside the rest. The emptied `incoming/` folder is the record of what has
+been added, so re-running is safe.
+
+Everything else is derived from the file: page numbers continue from the end of
+the diary, dimensions are measured, EXIF rotation is baked in, and anything
+wider than 1600px is downscaled. Order comes from a numeric-aware filename sort,
+so `_10` lands after `_2` rather than before it.
+
+If a scan is guessed wrong — an open spread that happens to be portrait, say —
+override it:
+
+```bash
+npm run add -- --commit --single=odd-one.jpg
+```
+
+`first_line` stays empty; fill it in from `/admin/pages`.
+
+The script also regenerates `src/lib/manifest.generated.json`, which is what
+`DIARY_SOURCE=local` reads. That file is gitignored like `images/` itself —
+both only exist on the machine holding the scans, so a fresh clone has neither.
+Never edit it by hand.
 
 ## Filling in `first_line`
 
@@ -171,7 +207,7 @@ src/lib/
   pages.js        THE SEAM — page data, view assembly, image URLs
   supabase.js     server-only client (service-role key)
 scripts/
-  upload.mjs      normalise, upload, and seed rows
+  add-pages.mjs   append scans from images/incoming/
 supabase/migrations/
   0001_init.sql   schema, indexes, RLS
 ```

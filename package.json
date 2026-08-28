@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "upload": "node --env-file=.env.local scripts/upload.mjs"
+    "add": "node --env-file=.env.local scripts/add-pages.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

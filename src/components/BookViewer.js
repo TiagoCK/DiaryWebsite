@@ -120,7 +120,8 @@ export default function BookViewer({ views, totalPages, animate = true, renderTo
     return (
       <div className="viewer">
         <p className="admin__note">
-          No pages yet. Run <code>npm run upload -- --commit</code> to add scans.
+          No pages yet. Drop scans into <code>images/incoming/</code> and run{" "}
+          <code>npm run add -- --commit</code>.
         </p>
       </div>
     );

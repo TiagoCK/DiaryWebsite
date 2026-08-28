@@ -12,8 +12,6 @@
  * local data in that case would be far more confusing than a loud failure.
  */
 
-const SCAN_PREFIX = "1787802885506-91ca7dc4-4c02-4bfc-8f87-fb08cb631c08_";
-
 /** Which backing store to read from. */
 export const DIARY_SOURCE = process.env.DIARY_SOURCE === "local" ? "local" : "supabase";
 
@@ -21,40 +19,35 @@ export const DIARY_SOURCE = process.env.DIARY_SOURCE === "local" ? "local" : "su
 export const DIARY_ID = 1;
 
 /**
- * The local scans, in order.
+ * The local scans, in order. Written by scripts/add-pages.mjs -- never by hand.
  *
+ *   file      the name in images/
  *   pageId    first physical page number this scan covers
  *   pageCount 1 for a single page, 2 for an open spread
- *   width     DISPLAY dimensions, already EXIF-corrected
+ *   width     the LOCAL file's display dimensions, EXIF applied
  *   height
  *
- * Every spread here carries an EXIF orientation of 6 or 8, so its stored JPEG
- * dimensions are portrait while it displays landscape. The numbers below are
- * the displayed ones. Browsers rotate automatically; anything server-side must
- * call sharp().rotate() or three of these come out opposite the rest.
+ * These are the local file's dimensions, which are not always the database's:
+ * a scan wider than 1600px is downscaled on upload, so the published image is
+ * smaller than the master sitting in images/. Local mode serves the master, so
+ * it needs the master's numbers.
  *
- * Order is explicit rather than derived from filenames: both batches end in
- * digits, so sorting on the trailing number alone interleaves them.
- *
- * This doubles as the seed for scripts/upload.mjs -- it was verified against
- * every file, so the upload reuses it rather than re-deriving it.
+ * Gitignored, like images/ itself. Both exist only on the machine holding the
+ * scans, so a fresh clone has neither and local mode has nothing to serve --
+ * hence the empty fallback rather than a hard failure.
  */
-export const MANIFEST = [
-  { file: "pg1.jpg", pageId: 1, pageCount: 1, width: 553, height: 1024 },
-  { file: "pg2.jpg", pageId: 2, pageCount: 1, width: 631, height: 1024 },
-  { file: "pg3.jpg", pageId: 3, pageCount: 2, width: 1024, height: 878 },
-  { file: `${SCAN_PREFIX}1.jpg`, pageId: 5, pageCount: 2, width: 1024, height: 955 },
-  { file: `${SCAN_PREFIX}2.jpg`, pageId: 7, pageCount: 2, width: 1024, height: 885 },
-  { file: `${SCAN_PREFIX}3.jpg`, pageId: 9, pageCount: 2, width: 1024, height: 950 },
-  { file: `${SCAN_PREFIX}4.jpg`, pageId: 11, pageCount: 2, width: 1024, height: 955 },
-  { file: `${SCAN_PREFIX}5.jpg`, pageId: 13, pageCount: 2, width: 1024, height: 885 },
-  { file: `${SCAN_PREFIX}6.jpg`, pageId: 15, pageCount: 2, width: 1024, height: 955 },
-  { file: `${SCAN_PREFIX}7.jpg`, pageId: 17, pageCount: 2, width: 1024, height: 885 },
-  { file: `${SCAN_PREFIX}8.jpg`, pageId: 19, pageCount: 2, width: 1024, height: 885 },
-  { file: `${SCAN_PREFIX}9.jpg`, pageId: 21, pageCount: 2, width: 1024, height: 866 },
-  { file: `${SCAN_PREFIX}10.jpg`, pageId: 23, pageCount: 2, width: 1024, height: 903 },
-  { file: `${SCAN_PREFIX}11.jpg`, pageId: 25, pageCount: 2, width: 1024, height: 903 },
-];
+export const MANIFEST = await loadManifest();
+
+async function loadManifest() {
+  try {
+    const { default: entries } = await import("./manifest.generated.json", {
+      with: { type: "json" },
+    });
+    return entries;
+  } catch {
+    return [];
+  }
+}
 
 /** Storage object key for a page. Zero-padded so keys sort in reading order. */
 export function storageKeyFor(pageId, diaryId = DIARY_ID) {
