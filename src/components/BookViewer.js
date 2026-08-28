@@ -27,11 +27,16 @@ function Half({ half }) {
   );
 }
 
-export default function BookViewer({ views, totalPages }) {
+export default function BookViewer({ views, totalPages, animate = true, renderToolbar }) {
   const [index, setIndex] = useState(0);
   // null at rest; otherwise { dir, target, phase } for the flip in flight.
   const [flip, setFlip] = useState(null);
   const [reducedMotion, setReducedMotion] = useState(false);
+
+  // The admin editor turns the flip off: 600ms per step is tiring when you are
+  // stepping through looking for scans to fix. Reuses the reduced-motion branch
+  // below rather than introducing a second way to skip the animation.
+  const skipAnimation = !animate || reducedMotion;
 
   // Mirrors `flip` so callbacks can read it without going stale.
   const flipRef = useRef(null);
@@ -65,7 +70,7 @@ export default function BookViewer({ views, totalPages }) {
       const target = dir === "next" ? index + 1 : index - 1;
       if (target < 0 || target >= views.length) return;
 
-      if (reducedMotion) {
+      if (skipAnimation) {
         setIndex(target);
         return;
       }
@@ -80,7 +85,7 @@ export default function BookViewer({ views, totalPages }) {
       clearTimeout(timerRef.current);
       timerRef.current = setTimeout(settle, FLIP_MS + 150);
     },
-    [index, views.length, reducedMotion, settle]
+    [index, views.length, skipAnimation, settle]
   );
 
   // Commit the leaf's starting angle before moving it, or the browser collapses
@@ -127,6 +132,8 @@ export default function BookViewer({ views, totalPages }) {
 
   return (
     <div className="viewer">
+      {renderToolbar && <div className="viewer__toolbar">{renderToolbar(current)}</div>}
+
       <div className="book">
         <div className="slot slot--left">
           <Half half={leftHalf} />

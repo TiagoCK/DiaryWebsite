@@ -466,3 +466,221 @@ h1, h2 {
   background: var(--background);
   color: var(--foreground);
 }
+
+/* ---------- admin nav ---------- */
+
+.adminnav {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 1.75rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.adminnav__tab {
+  font-size: 0.9rem;
+  padding: 0.5rem 0.9rem;
+  color: var(--muted);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.adminnav__tab:hover {
+  color: var(--foreground);
+}
+
+.adminnav__tab--active {
+  color: var(--foreground);
+  border-bottom-color: var(--foreground);
+}
+
+/* ---------- edit buttons over the book ---------- */
+
+.viewer__toolbar {
+  margin-bottom: 0.75rem;
+}
+
+.edittools {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.edittools__btn {
+  flex: 1 1 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--foreground);
+  text-decoration: none;
+}
+
+.edittools--single .edittools__btn {
+  flex: 0 1 auto;
+  margin: 0 auto;
+}
+
+.edittools__btn:hover {
+  border-color: var(--muted);
+}
+
+.edittools__flag {
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0.05rem 0.35rem;
+}
+
+/* ---------- image editor ---------- */
+
+.editor__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.editor__back {
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--muted);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.editor__tools {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin: 1rem 0;
+}
+
+.editor__tools button {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.editor__tools button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.editor__dims {
+  margin-left: auto;
+  font-size: 0.85rem;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.editor__flag {
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0.05rem 0.35rem;
+}
+
+.editor__stage {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 1rem;
+  display: flex;
+  justify-content: center;
+}
+
+.editor__cropwrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.editor__img {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  width: auto;
+  height: auto;
+}
+
+/* Marks where the reader will split a two-page spread. */
+.editor__spine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 0;
+  border-left: 1px dashed rgba(220, 40, 40, 0.85);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.editor__warn {
+  margin-top: 0.75rem;
+}
+
+.editor__actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+.editor__actions button {
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.5rem 1.2rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.editor__actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.editor__save {
+  border-color: var(--muted) !important;
+  font-weight: 600;
+}
+
+.editor__ok {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 1rem 0 0;
+}
+
+.editor__error {
+  color: #b3261e;
+  font-size: 0.9rem;
+  margin: 1rem 0 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .editor__error {
+    color: #f2b8b5;
+  }
+}

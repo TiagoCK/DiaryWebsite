@@ -36,6 +36,17 @@ export function getSupabase() {
 /** Storage bucket holding the scans. Private: reachable only via signed URLs. */
 export const BUCKET = "diary-scans";
 
+/**
+ * Where a scan's pristine original lives, once it has been edited.
+ *
+ * A separate top-level prefix, not a sibling of the live object: the split is
+ * structural so that "serve an original" can never happen by accident. Only
+ * /api/admin/original/[pageId] reads from here, and it requires an admin.
+ */
+export function originalKeyFor(storageKey) {
+  return `originals/${storageKey}`;
+}
+
 /** How long a minted image URL stays valid. */
 export const SIGNED_URL_TTL_SECONDS = 10 * 60;
 

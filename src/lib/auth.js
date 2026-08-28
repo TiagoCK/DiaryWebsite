@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { redirect } from "next/navigation";
 import { createAuthClient } from "./supabase-server";
 import { getSupabase } from "./supabase";
@@ -5,12 +6,16 @@ import { getSupabase } from "./supabase";
 /**
  * The signed-in user and their role, or null.
  *
+ * Wrapped in React's cache() so the admin layout and the page inside it don't
+ * each pay for a token revalidation plus a profile query -- it runs once per
+ * request.
+ *
  * Deliberately getUser() and not getSession(). getSession() decodes whatever is
  * in the cookie and hands it back without checking it; getUser() revalidates the
  * token against the auth server. Every authorization decision below rests on
  * this, so it has to be the checked one.
  */
-export async function getCurrentUser() {
+export const getCurrentUser = cache(async function getCurrentUser() {
   const supabase = await createAuthClient();
   const {
     data: { user },
@@ -27,7 +32,7 @@ export async function getCurrentUser() {
     role,
     isAdmin: role === "admin",
   };
-}
+});
 
 /**
  * Read a user's role, creating the profile row if it is missing.

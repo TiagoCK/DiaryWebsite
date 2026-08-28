@@ -76,7 +76,10 @@ export function findLocalPage(pageId) {
  * someone actually looks at, and keeps storage keys out of the browser.
  */
 export function getPageImageUrl(page) {
-  return `/api/scan/${page.pageId}`;
+  // ?v= changes whenever the image is edited. Without it an edited scan can be
+  // served from a cache that still holds the previous bytes under the same URL.
+  const version = page.updatedAt ? Date.parse(page.updatedAt) : 0;
+  return version ? `/api/scan/${page.pageId}?v=${version}` : `/api/scan/${page.pageId}`;
 }
 
 /** Ordered page records. Metadata only -- no image bytes. */
@@ -92,6 +95,10 @@ function readLocalPages() {
     width: page.width,
     height: page.height,
     firstLine: null,
+    hasOriginal: false,
+    rotation: 0,
+    crop: null,
+    updatedAt: null,
   }));
 }
 
@@ -99,7 +106,9 @@ async function readSupabasePages() {
   const { getSupabase } = await import("./supabase.js");
   const { data, error } = await getSupabase()
     .from("pages")
-    .select("page_id, page_count, width, height, first_line")
+    .select(
+      "page_id, page_count, width, height, first_line, original_key, edit_rotation, edit_crop, updated_at"
+    )
     .eq("diary_id", DIARY_ID)
     .order("page_id", { ascending: true });
 
@@ -111,5 +120,9 @@ async function readSupabasePages() {
     width: row.width,
     height: row.height,
     firstLine: row.first_line,
+    hasOriginal: Boolean(row.original_key),
+    rotation: row.edit_rotation ?? 0,
+    crop: row.edit_crop ?? null,
+    updatedAt: row.updated_at ?? null,
   }));
 }

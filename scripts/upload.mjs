@@ -3,9 +3,15 @@
  *
  *   npm run upload -- --dry-run    show what would happen, change nothing
  *   npm run upload -- --commit     do it
+ *   npm run upload -- --commit --force   re-upload pages that already exist
  *
  * Safe to re-run: storage objects are overwritten in place and rows are upserted
  * on (diary_id, page_id), so a partial upload is repaired rather than doubled.
+ *
+ * Pages that already exist are SKIPPED unless --force. Without that, re-running
+ * this would quietly overwrite every scan with the file from images/ and destroy
+ * any rotation or crop applied in the image editor -- edits live only in storage,
+ * never in images/.
  *
  * Run the migration in supabase/migrations/0001_init.sql first -- this script
  * writes rows, it does not create the table.
@@ -25,6 +31,7 @@ const JPEG_QUALITY = 85;
 const args = new Set(process.argv.slice(2));
 const commit = args.has("--commit");
 const dryRun = args.has("--dry-run") || !commit;
+const force = args.has("--force");
 
 /**
  * Normalise one scan.
@@ -87,11 +94,21 @@ async function main() {
   await ensureBucket(supabase);
   console.log();
 
+  // Anything already in the table may carry edits that exist nowhere else.
+  const { data: existingRows } = await supabase.from("pages").select("page_id");
+  const existing = new Set((existingRows ?? []).map((r) => r.page_id));
+  const skipped = [];
+
   const rows = [];
   let totalBefore = 0;
   let totalAfter = 0;
 
   for (const page of MANIFEST) {
+    if (existing.has(page.pageId) && !force) {
+      skipped.push(page.pageId);
+      continue;
+    }
+
     const image = await normalise(page.file);
     const key = storageKeyFor(page.pageId);
 
@@ -135,7 +152,7 @@ async function main() {
     );
   }
 
-  if (commit) {
+  if (commit && rows.length) {
     const { error } = await supabase
       .from("pages")
       .upsert(rows, { onConflict: "diary_id,page_id" });
