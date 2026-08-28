@@ -8,6 +8,9 @@ import "react-image-crop/dist/ReactCrop.css";
 import { revertImage, saveImageEdit, setRedactionBoxes } from "@/app/admin/editor/actions";
 import { toOriginalSpace, toRotatedSpace } from "@/lib/redaction";
 
+/** Below this (percent of the image) a drag is treated as a stray click. */
+const MIN_BAR_PERCENT = 1;
+
 /**
  * Edit one scan: rotate and crop it, or cover areas with black bars.
  *
@@ -30,14 +33,25 @@ export default function ImageEditor({ page }) {
   const [status, setStatus] = useState(null);
   const [pending, startTransition] = useTransition();
 
-  // Held in ORIGINAL space, converted for display.
+  // Bars are held in ORIGINAL space and converted for display.
   const [boxes, setBoxes] = useState(page.boxes ?? []);
   const [selection, setSelection] = useState(undefined);
+  const [barTool, setBarTool] = useState("draw");
+  const [selected, setSelected] = useState(null);
+
+  /**
+   * Preview-only. There is no field on setRedactionBoxes that could carry this
+   * and publish() fills bars with opaque black, so a see-through bar cannot
+   * reach a saved image. It also resets to solid on every load, so a
+   * see-through bar is never mistaken for one that has not been applied.
+   */
+  const [seeThrough, setSeeThrough] = useState(false);
 
   const sourceRef = useRef(null);
 
   const isSpread = page.pageCount === 2;
   const label = isSpread ? `Pages ${page.pageId}–${page.pageId + 1}` : `Page ${page.pageId}`;
+  const dirtyBars = JSON.stringify(boxes) !== JSON.stringify(page.boxes ?? []);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,6 +71,28 @@ export default function ImageEditor({ page }) {
     };
   }, [page.pageId, page.rotation]);
 
+  const removeBar = useCallback((index) => {
+    setBoxes((list) => list.filter((_, j) => j !== index));
+    setSelected(null);
+  }, []);
+
+  // Delete removes the selected bar, Escape drops the selection.
+  useEffect(() => {
+    if (mode !== "redact" || selected === null) return undefined;
+    const onKey = (event) => {
+      const tag = event.target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (event.key === "Delete" || event.key === "Backspace") {
+        event.preventDefault();
+        removeBar(selected);
+      } else if (event.key === "Escape") {
+        setSelected(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mode, selected, removeBar]);
+
   const rotate = useCallback(
     (delta) => {
       const next = (((rotation + delta) % 360) + 360) % 360;
@@ -71,15 +107,21 @@ export default function ImageEditor({ page }) {
     [rotation]
   );
 
-  function addBar() {
-    if (!selection?.width || !selection?.height) return;
-    setBoxes((list) => [...list, toOriginalSpace(selection, rotation)]);
+  /** Drawing commits on release; a click without a real drag makes nothing. */
+  function commitDrawn(percent) {
+    if (!percent || percent.width < MIN_BAR_PERCENT || percent.height < MIN_BAR_PERCENT) {
+      setSelection(undefined);
+      return;
+    }
+    setBoxes((list) => [...list, toOriginalSpace(percent, rotation)]);
     setSelection(undefined);
   }
 
   const rotatedSize = getRotatedSize(sourceRef.current, rotation);
   const outputSize = getOutputSize(rotatedSize, crop);
   const shownBoxes = boxes.map((b) => toRotatedSpace(b, rotation));
+
+  const editingBar = mode === "redact" && barTool === "select" && selected !== null;
 
   function run(fn, after) {
     setStatus(null);
@@ -115,7 +157,33 @@ export default function ImageEditor({ page }) {
       }
     );
 
-  const onSaveBars = () => run(() => setRedactionBoxes({ pageId: page.pageId, boxes }));
+  const onSaveBars = () =>
+    run(
+      () =>
+        // Only geometry crosses this boundary. There is no opacity field.
+        setRedactionBoxes({
+          pageId: page.pageId,
+          boxes: boxes.map((b) => ({ x: b.x, y: b.y, width: b.width, height: b.height })),
+        }),
+      () => setSelected(null)
+    );
+
+  // What ReactCrop is bound to depends on the tool: a transient rectangle while
+  // drawing, the selected bar while editing one.
+  const activeCrop = (() => {
+    if (mode === "crop") return crop;
+    if (editingBar) return { unit: "%", ...shownBoxes[selected] };
+    return selection;
+  })();
+
+  function onCropChange(percent) {
+    if (mode === "crop") return setCrop(percent);
+    if (editingBar) {
+      const stored = toOriginalSpace(percent, rotation);
+      return setBoxes((list) => list.map((b, i) => (i === selected ? stored : b)));
+    }
+    setSelection(percent);
+  }
 
   return (
     <div className="editor">
@@ -139,6 +207,7 @@ export default function ImageEditor({ page }) {
             className={`editor__mode${mode === id ? " editor__mode--on" : ""}`}
             onClick={() => {
               setSelection(undefined);
+              setSelected(null);
               setStatus(null);
               setMode(id);
             }}
@@ -167,45 +236,110 @@ export default function ImageEditor({ page }) {
         </div>
       ) : (
         <div className="editor__tools">
-          <button type="button" onClick={addBar} disabled={pending || !selection}>
-            + Add bar
+          <div className="editor__seg" role="group" aria-label="Bar tool">
+            {[
+              ["draw", "Draw"],
+              ["select", "Select"],
+            ].map(([id, text]) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={barTool === id}
+                className={`editor__segbtn${barTool === id ? " editor__segbtn--on" : ""}`}
+                onClick={() => {
+                  setBarTool(id);
+                  setSelection(undefined);
+                  setSelected(null);
+                }}
+                disabled={pending}
+              >
+                {text}
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setSeeThrough((v) => !v)}
+            disabled={pending || !boxes.length}
+            aria-pressed={seeThrough}
+          >
+            {seeThrough ? "Solid bars" : "See through bars"}
           </button>
-          <button type="button" onClick={() => setBoxes([])} disabled={pending || !boxes.length}>
+
+          <button
+            type="button"
+            onClick={() => removeBar(selected)}
+            disabled={pending || selected === null}
+          >
+            Delete bar
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setBoxes([]);
+              setSelected(null);
+            }}
+            disabled={pending || !boxes.length}
+          >
             Remove all
           </button>
+
           <span className="editor__dims">
-            {boxes.length === 0 ? "Drag a rectangle, then Add bar" : `${boxes.length} bar(s)`}
+            {barTool === "draw"
+              ? "Drag to place a bar"
+              : selected === null
+                ? "Click a bar to select it"
+                : `Bar ${selected + 1} selected`}
+            {seeThrough && <span className="editor__flag">preview only</span>}
           </span>
         </div>
       )}
 
       <div className="editor__stage">
         {preview ? (
-          <div className="editor__cropwrap">
+          <div className={`editor__cropwrap${editingBar ? " editor__cropwrap--editing" : ""}`}>
             <ReactCrop
-              crop={mode === "crop" ? crop : selection}
-              onChange={(_p, percent) =>
-                mode === "crop" ? setCrop(percent) : setSelection(percent)
-              }
-              keepSelection={mode === "crop"}
+              crop={activeCrop}
+              onChange={(_p, percent) => onCropChange(percent)}
+              onComplete={(_p, percent) => {
+                if (mode === "redact" && barTool === "draw") commitDrawn(percent);
+              }}
+              keepSelection={mode === "crop" || editingBar}
+              // With nothing selected in Select mode, ReactCrop must stop
+              // swallowing pointer events or the bars underneath are unclickable.
+              disabled={mode === "redact" && barTool === "select" && selected === null}
             >
               <img src={preview} alt="" className="editor__img" />
             </ReactCrop>
 
             {/* Exactly what the published image will have covered. */}
-            {shownBoxes.map((bar, i) => (
-              <div
-                key={i}
-                className="editor__bar"
-                style={{
-                  left: `${bar.x}%`,
-                  top: `${bar.y}%`,
-                  width: `${bar.width}%`,
-                  height: `${bar.height}%`,
-                }}
-                aria-hidden="true"
-              />
-            ))}
+            {shownBoxes.map((bar, i) => {
+              const isSelected = editingBar && selected === i;
+              return (
+                <div
+                  key={i}
+                  className={[
+                    "editor__bar",
+                    seeThrough ? "editor__bar--ghost" : "",
+                    mode === "redact" && barTool === "select" ? "editor__bar--pickable" : "",
+                    isSelected ? "editor__bar--selected" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  style={{
+                    left: `${bar.x}%`,
+                    top: `${bar.y}%`,
+                    width: `${bar.width}%`,
+                    height: `${bar.height}%`,
+                  }}
+                  onClick={() => {
+                    if (mode === "redact" && barTool === "select") setSelected(i);
+                  }}
+                />
+              );
+            })}
 
             {mode === "redact" && crop && (
               // Bars are placed against the uncropped image, so the crop is shown
@@ -242,15 +376,19 @@ export default function ImageEditor({ page }) {
           {boxes.length > 0 && (
             <ul className="editor__barlist">
               {shownBoxes.map((bar, i) => (
-                <li key={i}>
-                  <span>
-                    Bar {i + 1} &mdash; {Math.round(bar.width)}% &times; {Math.round(bar.height)}%
-                  </span>
+                <li key={i} className={selected === i ? "editor__barlist--on" : undefined}>
                   <button
                     type="button"
-                    onClick={() => setBoxes((list) => list.filter((_, j) => j !== i))}
+                    className="editor__barpick"
+                    onClick={() => {
+                      setBarTool("select");
+                      setSelected(i);
+                    }}
                     disabled={pending}
                   >
+                    Bar {i + 1} &mdash; {Math.round(bar.width)}% &times; {Math.round(bar.height)}%
+                  </button>
+                  <button type="button" onClick={() => removeBar(i)} disabled={pending}>
                     Remove
                   </button>
                 </li>
@@ -260,10 +398,11 @@ export default function ImageEditor({ page }) {
 
           <p className="admin__note">
             Bars are burned into the image the site publishes, not drawn over it in the
-            browser. The stored original stays uncensored so you can still see what a bar
-            covers, which means <strong>any admin can see it too</strong> &mdash; and
-            your local <code>images/</code> masters are untouched either way. Removing a
-            bar republishes the page without it.
+            browser &mdash; see-through is a preview here only and never reaches a saved
+            image. The stored original stays uncensored so you can still see what a bar
+            covers, which means <strong>any admin can see it too</strong>, and your local{" "}
+            <code>images/</code> masters are untouched either way. Removing a bar
+            republishes the page without it.
           </p>
         </div>
       )}
@@ -299,6 +438,7 @@ export default function ImageEditor({ page }) {
             disabled={pending || !preview}
           >
             {pending ? "Working…" : boxes.length ? `Save ${boxes.length} bar(s)` : "Remove all bars"}
+            {dirtyBars && !pending && <span className="editor__unsaved">unsaved</span>}
           </button>
         )}
       </div>

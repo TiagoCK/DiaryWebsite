@@ -813,3 +813,102 @@ h1, h2 {
   pointer-events: none;
   z-index: 3;
 }
+
+/* ---------- bar tool switch ---------- */
+
+.editor__seg {
+  display: inline-flex;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.editor__segbtn {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.9rem;
+  border: none;
+  background: var(--background);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.editor__segbtn + .editor__segbtn {
+  border-left: 1px solid var(--rule);
+}
+
+.editor__segbtn--on {
+  background: var(--paper);
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.editor__segbtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---------- bar states ---------- */
+
+/*
+ * See-through is a preview affordance only. The published image is composited
+ * server-side with fully opaque black, and there is no field on the save action
+ * that could carry an opacity, so this cannot reach a stored image.
+ */
+.editor__bar--ghost {
+  opacity: 0.35;
+}
+
+.editor__bar--pickable {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.editor__bar--pickable:hover {
+  outline: 2px solid rgba(90, 140, 255, 0.9);
+  outline-offset: -1px;
+}
+
+/*
+ * The selected bar stops taking pointer events so ReactCrop's resize handles,
+ * which sit over the same area, remain grabbable.
+ */
+.editor__bar--selected {
+  pointer-events: none;
+  opacity: 0.35;
+  outline: 2px dashed rgba(90, 140, 255, 0.95);
+  outline-offset: -1px;
+}
+
+/* While editing a bar, ReactCrop's handles must paint above the bar overlays. */
+.editor__cropwrap--editing .ReactCrop {
+  position: relative;
+  z-index: 6;
+}
+
+.editor__barlist--on {
+  border-color: rgba(90, 140, 255, 0.8);
+}
+
+.editor__barpick {
+  font: inherit;
+  font-size: 0.85rem;
+  flex: 1 1 auto;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+}
+
+.editor__unsaved {
+  margin-left: 0.5rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0.05rem 0.35rem;
+}
