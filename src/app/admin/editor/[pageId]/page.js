@@ -30,13 +30,10 @@ export default async function EditPage({ params }) {
       page={{
         pageId: row.page_id,
         pageCount: row.page_count,
-        width: row.width,
-        height: row.height,
         hasOriginal: Boolean(row.original_key),
         rotation: row.edit_rotation ?? 0,
         crop: row.edit_crop ?? null,
         boxes: row.redaction_boxes ?? [],
-        isRedacted: Boolean(row.redacted_at),
       }}
     />
   );

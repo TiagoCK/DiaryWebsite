@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import "./globals.css";
 import { getCurrentUser } from "@/lib/auth";
 
@@ -16,18 +18,18 @@ export default async function RootLayout({ children }) {
         <main>
           {user && (
             <header className="topbar">
-              <a className="topbar__title" href="/">
+              <Link className="topbar__title" href="/">
                 My Diary
-              </a>
+              </Link>
               <div className="topbar__right">
                 <span className="topbar__user">
                   {user.email}
                   <span className={`badge badge--${user.role}`}>{user.role}</span>
                 </span>
                 {user.isAdmin && (
-                  <a className="topbar__link" href="/admin">
+                  <Link className="topbar__link" href="/admin">
                     Admin
-                  </a>
+                  </Link>
                 )}
                 <form action="/auth/signout" method="post">
                   <button type="submit" className="topbar__signout">

@@ -64,19 +64,19 @@ async function publish(row, { rotation, crop, boxes }) {
   const originalKey = await ensureOriginal(row);
   const source = await download(originalKey);
 
+  const base = await sharp(source).metadata();
   let pipeline = sharp(source);
 
   const usable = (boxes ?? []).map(sanitiseBox).filter(Boolean);
   if (usable.length > 0) {
-    const meta = await sharp(source).metadata();
     const overlays = usable
       .map((box) => {
-        const left = Math.round((box.x / 100) * meta.width);
-        const top = Math.round((box.y / 100) * meta.height);
-        const width = Math.min(Math.round((box.width / 100) * meta.width), meta.width - left);
+        const left = Math.round((box.x / 100) * base.width);
+        const top = Math.round((box.y / 100) * base.height);
+        const width = Math.min(Math.round((box.width / 100) * base.width), base.width - left);
         const height = Math.min(
-          Math.round((box.height / 100) * meta.height),
-          meta.height - top
+          Math.round((box.height / 100) * base.height),
+          base.height - top
         );
         if (width < 1 || height < 1) return null;
         return {
@@ -105,16 +105,24 @@ async function publish(row, { rotation, crop, boxes }) {
   pipeline = pipeline.rotate(rotation);
 
   if (crop) {
-    const meta = await pipeline.metadata();
-    const left = Math.round((clampPercent(crop.x) / 100) * meta.width);
-    const top = Math.round((clampPercent(crop.y) / 100) * meta.height);
+    // Derived, not read back from the pipeline. sharp's metadata() describes the
+    // INPUT image and ignores queued operations, so asking it after .rotate()
+    // returns the pre-rotation dimensions -- which for a quarter turn are the
+    // wrong way round, and extract() then fails with "bad extract area". A
+    // quarter turn simply swaps them.
+    const turned = rotation === 90 || rotation === 270;
+    const rotatedWidth = turned ? base.height : base.width;
+    const rotatedHeight = turned ? base.width : base.height;
+
+    const left = Math.round((clampPercent(crop.x) / 100) * rotatedWidth);
+    const top = Math.round((clampPercent(crop.y) / 100) * rotatedHeight);
     const width = Math.min(
-      Math.round((clampPercent(crop.width) / 100) * meta.width),
-      meta.width - left
+      Math.round((clampPercent(crop.width) / 100) * rotatedWidth),
+      rotatedWidth - left
     );
     const height = Math.min(
-      Math.round((clampPercent(crop.height) / 100) * meta.height),
-      meta.height - top
+      Math.round((clampPercent(crop.height) / 100) * rotatedHeight),
+      rotatedHeight - top
     );
     if (width < 1 || height < 1) throw new Error("Crop area is empty.");
     pipeline = pipeline.extract({ left, top, width, height });
@@ -155,7 +163,11 @@ export async function saveImageEdit({ pageId, rotation, crop }) {
   const row = await loadRow(id);
   if (!row) return { ok: false, message: "No such page." };
 
+  // A crop that was sent but has no usable area is an error, not a request to
+  // publish uncropped: silently dropping it would discard a crop the admin had
+  // already saved while still reporting success.
   const cleanCrop = crop ? sanitiseBox(crop) : null;
+  if (crop && !cleanCrop) return { ok: false, message: "Crop area is empty." };
 
   try {
     const result = await publish(row, {

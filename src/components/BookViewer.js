@@ -111,7 +111,21 @@ export default function BookViewer({ views, totalPages, animate = true, renderTo
     return () => window.removeEventListener("keydown", onKey);
   }, [go]);
 
+  // An empty diary is a reachable state -- a fresh project before the first
+  // upload, or every page deleted. Without this, views[0] is undefined and
+  // reading current.label below throws, taking down both the reader and the
+  // admin editor with a 500 and no way back from inside the app.
   const current = views[index];
+  if (!current) {
+    return (
+      <div className="viewer">
+        <p className="admin__note">
+          No pages yet. Run <code>npm run upload -- --commit</code> to add scans.
+        </p>
+      </div>
+    );
+  }
+
   const target = flip ? views[flip.target] : null;
   const forward = flip?.dir === "next";
 

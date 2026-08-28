@@ -51,7 +51,17 @@ export default function ImageEditor({ page }) {
 
   const isSpread = page.pageCount === 2;
   const label = isSpread ? `Pages ${page.pageId}–${page.pageId + 1}` : `Page ${page.pageId}`;
-  const dirtyBars = JSON.stringify(boxes) !== JSON.stringify(page.boxes ?? []);
+  const serverBoxes = JSON.stringify(page.boxes ?? []);
+  const dirtyBars = JSON.stringify(boxes) !== serverBoxes;
+
+  // Resync when the server's copy changes. After a save sanitiseBox may have
+  // clamped a box, and without this the local state keeps the unclamped values:
+  // the "unsaved" badge would never clear, and the bar drawn on screen would be
+  // wider than the one actually burned into the published image.
+  useEffect(() => {
+    setBoxes(JSON.parse(serverBoxes));
+    setSelected(null);
+  }, [serverBoxes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -310,6 +320,21 @@ export default function ImageEditor({ page }) {
               // With nothing selected in Select mode, ReactCrop must stop
               // swallowing pointer events or the bars underneath are unclickable.
               disabled={mode === "redact" && barTool === "select" && selected === null}
+              onDragStart={(event) => {
+                // While a bar is selected ReactCrop still owns the whole image,
+                // so a drag on empty canvas would be read as reshaping that bar
+                // and quietly move it off the content it covers. A drag that
+                // starts outside the selection deselects instead.
+                if (!editingBar) return;
+                const box = shownBoxes[selected];
+                const rect = event.currentTarget?.getBoundingClientRect?.();
+                if (!box || !rect || !rect.width || !rect.height) return;
+                const px = ((event.clientX - rect.left) / rect.width) * 100;
+                const py = ((event.clientY - rect.top) / rect.height) * 100;
+                const inside =
+                  px >= box.x && px <= box.x + box.width && py >= box.y && py <= box.y + box.height;
+                if (!inside) setSelected(null);
+              }}
             >
               <img src={preview} alt="" className="editor__img" />
             </ReactCrop>

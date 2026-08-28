@@ -1,5 +1,6 @@
 import { requireAdmin } from "@/lib/auth";
 import { getSupabase } from "@/lib/supabase";
+import ActionForm from "@/components/ActionForm";
 import { setUserRole } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -37,7 +38,7 @@ export default async function People() {
       <ul className="admin__list">
         {people.map((person) => (
           <li key={person.id} className="admin__row">
-            <form action={setUserRole}>
+            <ActionForm action={setUserRole}>
               <input type="hidden" name="userId" value={person.id} />
               <span className="admin__person">
                 {person.email}
@@ -54,7 +55,7 @@ export default async function People() {
                   <button type="submit">Set</button>
                 </>
               )}
-            </form>
+            </ActionForm>
           </li>
         ))}
       </ul>

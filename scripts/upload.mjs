@@ -109,6 +109,7 @@ async function main() {
   );
   const skipped = [];
   const skippedRedacted = [];
+  const staleOriginals = [];
 
   const rows = [];
   let totalBefore = 0;
@@ -158,7 +159,21 @@ async function main() {
       height: image.height,
       byte_size: image.byteSize,
       // first_line stays null -- typed in by hand in the Supabase table editor.
+      //
+      // Editing state is reset because the file underneath it has just been
+      // replaced. Leaving it would point original_key at a stale original and
+      // keep the old rotation, crop and bars, so the very next edit would
+      // regenerate from that stale original and silently undo this upload.
+      original_key: null,
+      edit_rotation: 0,
+      edit_crop: null,
+      redaction_boxes: null,
+      redacted_at: null,
     });
+
+    // The stale original is now unreferenced; leaving it behind would keep an
+    // uncensored copy of a page whose bars were just cleared.
+    staleOriginals.push(`originals/${key}`);
 
     const span =
       page.pageCount === 1 ? `p${page.pageId}` : `p${page.pageId}-${page.pageId + 1}`;
@@ -174,6 +189,12 @@ async function main() {
       .from("pages")
       .upsert(rows, { onConflict: "diary_id,page_id" });
     if (error) throw new Error(`Row upsert failed: ${error.message}`);
+
+    if (staleOriginals.length) {
+      // Ignore the result: an original only exists for a page that had been
+      // edited, so most of these keys were never there.
+      await supabase.storage.from(BUCKET).remove(staleOriginals);
+    }
   }
 
   console.log(

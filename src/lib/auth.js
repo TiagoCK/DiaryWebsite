@@ -39,28 +39,35 @@ export const getCurrentUser = cache(async function getCurrentUser() {
  *
  * Supabase does not let us install a trigger on auth.users, so nothing creates
  * profile rows automatically when you add someone in the dashboard. Instead the
- * row is created the first time we see the user. The insert ignores conflicts,
- * so concurrent requests race harmlessly.
+ * row is created the first time we see the user.
  *
- * A missing or unreadable profile always resolves to 'reader' -- the least
- * privilege -- never to admin.
+ * A read failure is raised rather than swallowed. Treating "I could not read
+ * your role" as "you are a reader" silently demotes an admin on any transient
+ * blip, and an invisible privilege change is worse than a visible error --
+ * especially when the same default is what an attacker would want.
+ *
+ * A genuinely absent row still resolves to 'reader', the least privilege.
  */
 async function ensureProfile(user) {
   const db = getSupabase();
 
-  const { data: existing } = await db
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .maybeSingle();
+  const read = () =>
+    db.from("profiles").select("role").eq("id", user.id).maybeSingle();
 
+  const { data: existing, error } = await read();
+  if (error) throw new Error(`Could not read your profile: ${error.message}`);
   if (existing) return existing.role;
 
-  const { data: created } = await db
+  const { error: insertError } = await db
     .from("profiles")
-    .upsert({ id: user.id, email: user.email }, { onConflict: "id", ignoreDuplicates: true })
-    .select("role")
-    .maybeSingle();
+    .upsert({ id: user.id, email: user.email }, { onConflict: "id", ignoreDuplicates: true });
+  if (insertError) throw new Error(`Could not create your profile: ${insertError.message}`);
+
+  // Read back rather than trusting the upsert's return: ON CONFLICT DO NOTHING
+  // yields no rows when another request created the row first, and inferring
+  // "reader" from that empty result would ignore whatever role it actually has.
+  const { data: created, error: rereadError } = await read();
+  if (rereadError) throw new Error(`Could not read your profile: ${rereadError.message}`);
 
   return created?.role ?? "reader";
 }
@@ -80,9 +87,15 @@ export async function requireUser(returnTo) {
   return user;
 }
 
-/** Require an admin. Readers get sent back to the diary, not to a login loop. */
+/**
+ * Require an admin. Readers get sent back to the diary, not to a login loop.
+ *
+ * No returnTo is passed. The middleware redirects signed-out visitors first and
+ * already carries the real pathname in ?next=, so hardcoding one here only
+ * managed to overwrite a correct deep link with "/admin".
+ */
 export async function requireAdmin() {
-  const user = await requireUser("/admin");
+  const user = await requireUser();
   if (!user.isAdmin) redirect("/");
   return user;
 }

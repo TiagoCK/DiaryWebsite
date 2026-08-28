@@ -912,3 +912,25 @@ h1, h2 {
   border-radius: 3px;
   padding: 0.05rem 0.35rem;
 }
+
+/* ---------- server action feedback ---------- */
+
+.actionform__error,
+.actionform__ok {
+  font-size: 0.8rem;
+  flex: 0 0 auto;
+}
+
+.actionform__error {
+  color: #b3261e;
+}
+
+.actionform__ok {
+  color: var(--muted);
+}
+
+@media (prefers-color-scheme: dark) {
+  .actionform__error {
+    color: #f2b8b5;
+  }
+}

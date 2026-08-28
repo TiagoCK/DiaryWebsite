@@ -15,7 +15,7 @@ const ROLES = ["reader", "admin"];
  * action is a publicly reachable endpoint with its own generated URL -- guarding
  * the page that shows the form does nothing to guard the action behind it.
  */
-export async function updateFirstLine(formData) {
+export async function updateFirstLine(_prevState, formData) {
   await requireAdmin();
 
   const pageId = Number(formData.get("pageId"));
@@ -36,8 +36,8 @@ export async function updateFirstLine(formData) {
 
   if (error) return { ok: false, message: error.message };
 
-  revalidatePath("/admin");
-  return { ok: true };
+  revalidatePath("/admin/pages");
+  return { ok: true, message: "Saved." };
 }
 
 /**
@@ -47,7 +47,7 @@ export async function updateFirstLine(formData) {
  * src/lib/auth.js), so a user who has never signed in has no row yet, and
  * promoting them before their first login has to work.
  */
-export async function setUserRole(formData) {
+export async function setUserRole(_prevState, formData) {
   const admin = await requireAdmin();
 
   const userId = (formData.get("userId") ?? "").toString();
@@ -57,6 +57,11 @@ export async function setUserRole(formData) {
 
   // Without this an admin can demote themselves, and if they are the only admin
   // nobody can ever assign the role again -- the app has no other way in.
+  //
+  // This one check is sufficient. Only an admin reaches this action, so the
+  // caller is always in the admin list, and demoting anyone else therefore
+  // leaves at least the caller. A count of remaining admins would be
+  // unreachable code.
   if (userId === admin.id) {
     return { ok: false, message: "You cannot change your own role." };
   }
@@ -71,6 +76,6 @@ export async function setUserRole(formData) {
 
   if (error) return { ok: false, message: error.message };
 
-  revalidatePath("/admin");
-  return { ok: true };
+  revalidatePath("/admin/people");
+  return { ok: true, message: "Saved." };
 }

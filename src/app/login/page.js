@@ -39,8 +39,7 @@ function LoginForm() {
       return;
     }
 
-    const next = searchParams.get("next");
-    router.replace(next && next.startsWith("/") ? next : "/");
+    router.replace(safeNext(searchParams.get("next")));
     router.refresh();
   }
 
@@ -80,6 +79,21 @@ function LoginForm() {
       </button>
     </form>
   );
+}
+
+/**
+ * Where to land after signing in.
+ *
+ * A leading slash is not enough on its own: "//evil.com" and "/\evil.com" are
+ * both protocol-relative and send the browser off-site, which would turn this
+ * page into an open redirect that fires the moment someone authenticates.
+ * Anything that is not unambiguously a path on this site falls back to "/".
+ */
+function safeNext(next) {
+  if (typeof next !== "string") return "/";
+  if (!next.startsWith("/")) return "/";
+  if (next.startsWith("//") || next.startsWith("/\\")) return "/";
+  return next;
 }
 
 export default function LoginPage() {

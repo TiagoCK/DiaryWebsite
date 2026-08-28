@@ -1,5 +1,6 @@
 import { requireAdmin } from "@/lib/auth";
 import { getPages } from "@/lib/pages";
+import ActionForm from "@/components/ActionForm";
 import { updateFirstLine } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +25,7 @@ export default async function PageIndex() {
               : `Pages ${page.pageId}\u2013${page.pageId + page.pageCount - 1}`;
           return (
             <li key={page.pageId} className="admin__row">
-              <form action={updateFirstLine}>
+              <ActionForm action={updateFirstLine}>
                 <input type="hidden" name="pageId" value={page.pageId} />
                 <span className="admin__span">{span}</span>
                 <input
@@ -36,7 +37,7 @@ export default async function PageIndex() {
                   aria-label={`First line for ${span}`}
                 />
                 <button type="submit">Save</button>
-              </form>
+              </ActionForm>
             </li>
           );
         })}
