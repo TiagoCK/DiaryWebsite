@@ -4,6 +4,7 @@
  *   npm run upload -- --dry-run    show what would happen, change nothing
  *   npm run upload -- --commit     do it
  *   npm run upload -- --commit --force   re-upload pages that already exist
+ *   npm run upload -- --commit --force --force-redacted   include redacted pages
  *
  * Safe to re-run: storage objects are overwritten in place and rows are upserted
  * on (diary_id, page_id), so a partial upload is repaired rather than doubled.
@@ -12,6 +13,11 @@
  * this would quietly overwrite every scan with the file from images/ and destroy
  * any rotation or crop applied in the image editor -- edits live only in storage,
  * never in images/.
+ *
+ * REDACTED pages are skipped even under --force, and need --force-redacted as
+ * well. Re-uploading replaces the stored original with the file from images/
+ * and leaves the bars pointing at content that has shifted underneath them, so
+ * censored areas can end up published.
  *
  * Run the migration in supabase/migrations/0001_init.sql first -- this script
  * writes rows, it does not create the table.
@@ -32,6 +38,7 @@ const args = new Set(process.argv.slice(2));
 const commit = args.has("--commit");
 const dryRun = args.has("--dry-run") || !commit;
 const force = args.has("--force");
+const forceRedacted = args.has("--force-redacted");
 
 /**
  * Normalise one scan.
@@ -95,15 +102,25 @@ async function main() {
   console.log();
 
   // Anything already in the table may carry edits that exist nowhere else.
-  const { data: existingRows } = await supabase.from("pages").select("page_id");
+  const { data: existingRows } = await supabase.from("pages").select("page_id, redacted_at");
   const existing = new Set((existingRows ?? []).map((r) => r.page_id));
+  const redacted = new Set(
+    (existingRows ?? []).filter((r) => r.redacted_at).map((r) => r.page_id)
+  );
   const skipped = [];
+  const skippedRedacted = [];
 
   const rows = [];
   let totalBefore = 0;
   let totalAfter = 0;
 
   for (const page of MANIFEST) {
+    // Checked before --force: re-uploading replaces the original the bars are
+    // positioned against, which can leave censored content exposed.
+    if (redacted.has(page.pageId) && !forceRedacted) {
+      skippedRedacted.push(page.pageId);
+      continue;
+    }
     if (existing.has(page.pageId) && !force) {
       skipped.push(page.pageId);
       continue;

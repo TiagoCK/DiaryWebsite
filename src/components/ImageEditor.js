@@ -5,36 +5,40 @@ import { useRouter } from "next/navigation";
 import ReactCrop from "react-image-crop";
 import "react-image-crop/dist/ReactCrop.css";
 
-import { revertImage, saveImageEdit } from "@/app/admin/editor/actions";
+import { revertImage, saveImageEdit, setRedactionBoxes } from "@/app/admin/editor/actions";
+import { toOriginalSpace, toRotatedSpace } from "@/lib/redaction";
 
 /**
- * Rotate and crop one scan.
+ * Edit one scan: rotate and crop it, or cover areas with black bars.
  *
- * Rotation is previewed by drawing the source into a canvas and handing the
- * result to the crop tool. That is not cosmetic: the server applies rotate then
- * crop, so the crop box has to be drawn on an already-rotated image or its
- * coordinates would describe a different region than the one you selected.
+ * Both modes work from the same picture -- the pristine original, drawn to a
+ * canvas at the current rotation. The server applies bars to the original
+ * before rotating and cropping, so a bar is stored in the original's coordinate
+ * space and converted only through the rotation being displayed. Crop never
+ * enters that conversion, which is why the preview shows the uncropped image
+ * with the crop region merely outlined.
  *
- * Crop travels as percentages rather than pixels, so the on-screen scale can
- * never disagree with the source resolution.
+ * Bars are data, not a burn. The original stays uncensored so an admin can see
+ * what a bar covers, and removing a bar republishes the page without it.
  */
 export default function ImageEditor({ page }) {
   const router = useRouter();
+  const [mode, setMode] = useState("crop");
   const [rotation, setRotation] = useState(page.rotation ?? 0);
   const [crop, setCrop] = useState(page.crop ? { unit: "%", ...page.crop } : undefined);
   const [preview, setPreview] = useState(null);
   const [status, setStatus] = useState(null);
   const [pending, startTransition] = useTransition();
 
+  // Held in ORIGINAL space, converted for display.
+  const [boxes, setBoxes] = useState(page.boxes ?? []);
+  const [selection, setSelection] = useState(undefined);
+
   const sourceRef = useRef(null);
 
   const isSpread = page.pageCount === 2;
-  const label = isSpread
-    ? `Pages ${page.pageId}–${page.pageId + 1}`
-    : `Page ${page.pageId}`;
+  const label = isSpread ? `Pages ${page.pageId}–${page.pageId + 1}` : `Page ${page.pageId}`;
 
-  // Load the pristine original once. Same-origin (the route streams the bytes
-  // rather than redirecting), so drawing it to a canvas does not taint it.
   useEffect(() => {
     let cancelled = false;
     const img = new Image();
@@ -42,7 +46,7 @@ export default function ImageEditor({ page }) {
       if (cancelled) return;
       sourceRef.current = img;
       setStatus(null);
-      redraw(img, rotation, setPreview);
+      redraw(img, page.rotation ?? 0, setPreview);
     };
     img.onerror = () => {
       if (!cancelled) setStatus({ ok: false, message: "Could not load the image." });
@@ -51,54 +55,67 @@ export default function ImageEditor({ page }) {
     return () => {
       cancelled = true;
     };
-    // Deliberately only on mount: rotation redraws are handled below.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page.pageId]);
+  }, [page.pageId, page.rotation]);
 
   const rotate = useCallback(
     (delta) => {
       const next = (((rotation + delta) % 360) + 360) % 360;
       setRotation(next);
-      // A crop box selected in the old orientation describes a different region
-      // once the image turns, so it is cleared rather than silently reinterpreted.
+      // A crop box chosen in the old orientation describes a different region
+      // once the image turns. Bars are unaffected -- they are stored against the
+      // original, so they follow the content through any rotation.
       setCrop(undefined);
+      setSelection(undefined);
       if (sourceRef.current) redraw(sourceRef.current, next, setPreview);
     },
     [rotation]
   );
 
-  const rotatedSize = getRotatedSize(sourceRef.current, rotation);
-  const outputSize = getOutputSize(rotatedSize, crop);
-
-  function onSave() {
-    setStatus(null);
-    startTransition(async () => {
-      const payload = {
-        pageId: page.pageId,
-        rotation,
-        crop: crop && crop.width > 0 && crop.height > 0
-          ? { x: crop.x, y: crop.y, width: crop.width, height: crop.height }
-          : null,
-      };
-      const result = await saveImageEdit(payload);
-      setStatus(result);
-      if (result.ok) router.refresh();
-    });
+  function addBar() {
+    if (!selection?.width || !selection?.height) return;
+    setBoxes((list) => [...list, toOriginalSpace(selection, rotation)]);
+    setSelection(undefined);
   }
 
-  function onRevert() {
+  const rotatedSize = getRotatedSize(sourceRef.current, rotation);
+  const outputSize = getOutputSize(rotatedSize, crop);
+  const shownBoxes = boxes.map((b) => toRotatedSpace(b, rotation));
+
+  function run(fn, after) {
     setStatus(null);
     startTransition(async () => {
-      const result = await revertImage({ pageId: page.pageId });
+      const result = await fn();
       setStatus(result);
       if (result.ok) {
-        setRotation(0);
-        setCrop(undefined);
-        if (sourceRef.current) redraw(sourceRef.current, 0, setPreview);
+        after?.();
         router.refresh();
       }
     });
   }
+
+  const onSave = () =>
+    run(() =>
+      saveImageEdit({
+        pageId: page.pageId,
+        rotation,
+        crop:
+          crop && crop.width > 0 && crop.height > 0
+            ? { x: crop.x, y: crop.y, width: crop.width, height: crop.height }
+            : null,
+      })
+    );
+
+  const onRevert = () =>
+    run(
+      () => revertImage({ pageId: page.pageId }),
+      () => {
+        setRotation(0);
+        setCrop(undefined);
+        if (sourceRef.current) redraw(sourceRef.current, 0, setPreview);
+      }
+    );
+
+  const onSaveBars = () => run(() => setRedactionBoxes({ pageId: page.pageId, boxes }));
 
   return (
     <div className="editor">
@@ -109,51 +126,146 @@ export default function ImageEditor({ page }) {
         </button>
       </div>
 
-      <div className="editor__tools">
-        <button type="button" onClick={() => rotate(-90)} disabled={pending || !preview}>
-          &#8630; Rotate left
-        </button>
-        <button type="button" onClick={() => rotate(90)} disabled={pending || !preview}>
-          &#8631; Rotate right
-        </button>
-        <button type="button" onClick={() => setCrop(undefined)} disabled={pending || !crop}>
-          Clear crop
-        </button>
-        <span className="editor__dims">
-          {outputSize
-            ? `Result: ${outputSize.width} × ${outputSize.height}`
-            : "…"}
-          {rotation !== 0 && <span className="editor__flag">rotated {rotation}°</span>}
-        </span>
+      <div className="editor__modes" role="tablist">
+        {[
+          ["crop", "Rotate & crop"],
+          ["redact", "Censor bars"],
+        ].map(([id, text]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={mode === id}
+            className={`editor__mode${mode === id ? " editor__mode--on" : ""}`}
+            onClick={() => {
+              setSelection(undefined);
+              setStatus(null);
+              setMode(id);
+            }}
+            disabled={pending}
+          >
+            {text}
+          </button>
+        ))}
       </div>
+
+      {mode === "crop" ? (
+        <div className="editor__tools">
+          <button type="button" onClick={() => rotate(-90)} disabled={pending || !preview}>
+            &#8630; Rotate left
+          </button>
+          <button type="button" onClick={() => rotate(90)} disabled={pending || !preview}>
+            &#8631; Rotate right
+          </button>
+          <button type="button" onClick={() => setCrop(undefined)} disabled={pending || !crop}>
+            Clear crop
+          </button>
+          <span className="editor__dims">
+            {outputSize ? `Result: ${outputSize.width} × ${outputSize.height}` : "…"}
+            {rotation !== 0 && <span className="editor__flag">rotated {rotation}°</span>}
+          </span>
+        </div>
+      ) : (
+        <div className="editor__tools">
+          <button type="button" onClick={addBar} disabled={pending || !selection}>
+            + Add bar
+          </button>
+          <button type="button" onClick={() => setBoxes([])} disabled={pending || !boxes.length}>
+            Remove all
+          </button>
+          <span className="editor__dims">
+            {boxes.length === 0 ? "Drag a rectangle, then Add bar" : `${boxes.length} bar(s)`}
+          </span>
+        </div>
+      )}
 
       <div className="editor__stage">
         {preview ? (
           <div className="editor__cropwrap">
             <ReactCrop
-              crop={crop}
-              onChange={(_pixel, percent) => setCrop(percent)}
-              keepSelection
+              crop={mode === "crop" ? crop : selection}
+              onChange={(_p, percent) =>
+                mode === "crop" ? setCrop(percent) : setSelection(percent)
+              }
+              keepSelection={mode === "crop"}
             >
               <img src={preview} alt="" className="editor__img" />
             </ReactCrop>
-            {isSpread && (
-              // The reader splits a spread at exactly 50% to build its two
-              // pages; there is no spine-position field. An off-centre crop
-              // would silently misalign every page split for this scan.
-              <div className="editor__spine" aria-hidden="true" />
+
+            {/* Exactly what the published image will have covered. */}
+            {shownBoxes.map((bar, i) => (
+              <div
+                key={i}
+                className="editor__bar"
+                style={{
+                  left: `${bar.x}%`,
+                  top: `${bar.y}%`,
+                  width: `${bar.width}%`,
+                  height: `${bar.height}%`,
+                }}
+                aria-hidden="true"
+              />
+            ))}
+
+            {mode === "redact" && crop && (
+              // Bars are placed against the uncropped image, so the crop is shown
+              // as an outline rather than applied -- anything outside it is
+              // simply not published.
+              <div
+                className="editor__cropghost"
+                style={{
+                  left: `${crop.x}%`,
+                  top: `${crop.y}%`,
+                  width: `${crop.width}%`,
+                  height: `${crop.height}%`,
+                }}
+                aria-hidden="true"
+              />
             )}
+
+            {mode === "crop" && isSpread && <div className="editor__spine" aria-hidden="true" />}
           </div>
         ) : (
           <p className="admin__note">Loading image&hellip;</p>
         )}
       </div>
 
-      {isSpread && (
+      {mode === "crop" && isSpread && (
         <p className="admin__note editor__warn">
-          This scan is a two-page spread. The reader splits it down the middle, so
-          keep the spine on the guide line or the page halves will be misaligned.
+          This scan is a two-page spread. The reader splits it down the middle, so keep
+          the spine on the guide line or the page halves will be misaligned.
         </p>
+      )}
+
+      {mode === "redact" && (
+        <div className="editor__redact">
+          {boxes.length > 0 && (
+            <ul className="editor__barlist">
+              {shownBoxes.map((bar, i) => (
+                <li key={i}>
+                  <span>
+                    Bar {i + 1} &mdash; {Math.round(bar.width)}% &times; {Math.round(bar.height)}%
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setBoxes((list) => list.filter((_, j) => j !== i))}
+                    disabled={pending}
+                  >
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <p className="admin__note">
+            Bars are burned into the image the site publishes, not drawn over it in the
+            browser. The stored original stays uncensored so you can still see what a bar
+            covers, which means <strong>any admin can see it too</strong> &mdash; and
+            your local <code>images/</code> masters are untouched either way. Removing a
+            bar republishes the page without it.
+          </p>
+        </div>
       )}
 
       {status && (
@@ -163,12 +275,30 @@ export default function ImageEditor({ page }) {
       )}
 
       <div className="editor__actions">
-        <button type="button" className="editor__save" onClick={onSave} disabled={pending || !preview}>
-          {pending ? "Working…" : "Save"}
-        </button>
-        {page.hasOriginal && (
-          <button type="button" onClick={onRevert} disabled={pending}>
-            Revert to original
+        {mode === "crop" ? (
+          <>
+            <button
+              type="button"
+              className="editor__save"
+              onClick={onSave}
+              disabled={pending || !preview}
+            >
+              {pending ? "Working…" : "Save"}
+            </button>
+            {page.hasOriginal && (
+              <button type="button" onClick={onRevert} disabled={pending}>
+                Undo rotate &amp; crop
+              </button>
+            )}
+          </>
+        ) : (
+          <button
+            type="button"
+            className="editor__save"
+            onClick={onSaveBars}
+            disabled={pending || !preview}
+          >
+            {pending ? "Working…" : boxes.length ? `Save ${boxes.length} bar(s)` : "Remove all bars"}
           </button>
         )}
       </div>
@@ -188,7 +318,7 @@ function redraw(img, rotation, setPreview) {
   ctx.rotate((rotation * Math.PI) / 180);
   ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
 
-  // Preview only -- the saved bytes are produced server-side by sharp from the
+  // Preview only -- published bytes are produced server-side by sharp from the
   // original, so this re-encode never reaches storage.
   setPreview(canvas.toDataURL("image/jpeg", 0.9));
 }

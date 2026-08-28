@@ -16,7 +16,9 @@ export default async function EditPage({ params }) {
 
   const { data: row } = await getSupabase()
     .from("pages")
-    .select("page_id, page_count, width, height, original_key, edit_rotation, edit_crop")
+    // See src/lib/pages.js: "*" keeps this working when the code is ahead of the
+    // database, rather than 500ing on a column that does not exist yet.
+    .select("*")
     .eq("diary_id", DIARY_ID)
     .eq("page_id", pageId)
     .maybeSingle();
@@ -33,6 +35,8 @@ export default async function EditPage({ params }) {
         hasOriginal: Boolean(row.original_key),
         rotation: row.edit_rotation ?? 0,
         crop: row.edit_crop ?? null,
+        boxes: row.redaction_boxes ?? [],
+        isRedacted: Boolean(row.redacted_at),
       }}
     />
   );

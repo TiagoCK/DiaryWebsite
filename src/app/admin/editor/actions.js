@@ -4,15 +4,20 @@ import sharp from "sharp";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { DIARY_ID } from "@/lib/pages";
+import { clampPercent, sanitiseBox } from "@/lib/redaction";
 import { BUCKET, getSupabase, originalKeyFor } from "@/lib/supabase";
 
 const ROTATIONS = [0, 90, 180, 270];
 const JPEG_QUALITY = 85;
+const MAX_BARS = 50;
 
 async function loadRow(pageId) {
   const { data, error } = await getSupabase()
     .from("pages")
-    .select("storage_key, original_key, width, height")
+    // "*" so a missing column degrades to a default instead of throwing. Writes
+    // that genuinely need the column still fail, but with a clear message from
+    // the one admin action involved rather than taking the whole site down.
+    .select("*")
     .eq("diary_id", DIARY_ID)
     .eq("page_id", pageId)
     .maybeSingle();
@@ -26,17 +31,119 @@ async function download(key) {
   return Buffer.from(await data.arrayBuffer());
 }
 
+/** Ensure a pristine original exists, and return its key. */
+async function ensureOriginal(row) {
+  if (row.original_key) return row.original_key;
+
+  const key = originalKeyFor(row.storage_key);
+  const pristine = await download(row.storage_key);
+  const { error } = await getSupabase()
+    .storage.from(BUCKET)
+    .upload(key, pristine, { contentType: "image/jpeg", upsert: true });
+  if (error) throw new Error(`Could not preserve original: ${error.message}`);
+  return key;
+}
+
 /**
- * Apply a rotation and crop, writing the result over the live image.
+ * Regenerate the published image from the pristine original.
  *
- * Always derives from the pristine original, so repeated edits cost exactly one
- * re-encode from the scan as uploaded rather than compounding JPEG loss -- and a
- * crop can later be widened again.
+ * The order is fixed and load-bearing: bars are applied to the ORIGINAL first,
+ * then rotation, then crop. Applying them last -- to the already rotated and
+ * cropped output -- would mean a stored box covering different content the
+ * moment the geometry changed, which for a censor bar is a leak, not a
+ * cosmetic slip. Applied first, the bars rotate and crop along with the content
+ * they cover.
  *
- * Order is rotate-then-crop, and the crop arrives as percentages of the ROTATED
- * image, which is what the editor draws its box on. Percentages rather than
- * pixels mean the preview's display scale can never disagree with the source
- * resolution.
+ * Every write path funnels through here, so rotating or cropping a redacted
+ * page can never republish it uncensored: the bars are re-applied each time.
+ *
+ * The original itself is never modified. Admins can still see what a bar covers
+ * via /api/admin/original; readers only ever get this output.
+ */
+async function publish(row, { rotation, crop, boxes }) {
+  const originalKey = await ensureOriginal(row);
+  const source = await download(originalKey);
+
+  let pipeline = sharp(source);
+
+  const usable = (boxes ?? []).map(sanitiseBox).filter(Boolean);
+  if (usable.length > 0) {
+    const meta = await sharp(source).metadata();
+    const overlays = usable
+      .map((box) => {
+        const left = Math.round((box.x / 100) * meta.width);
+        const top = Math.round((box.y / 100) * meta.height);
+        const width = Math.min(Math.round((box.width / 100) * meta.width), meta.width - left);
+        const height = Math.min(
+          Math.round((box.height / 100) * meta.height),
+          meta.height - top
+        );
+        if (width < 1 || height < 1) return null;
+        return {
+          input: { create: { width, height, channels: 3, background: { r: 0, g: 0, b: 0 } } },
+          left,
+          top,
+        };
+      })
+      .filter(Boolean);
+
+    if (overlays.length > 0) {
+      // Composited in its own pass, handed on as raw pixels. sharp orders some
+      // operations internally rather than by call order, so chaining composite
+      // straight into rotate would risk the bars being placed against the wrong
+      // orientation. Raw rather than a re-encode keeps this lossless.
+      const { data, info } = await sharp(source)
+        .composite(overlays)
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      pipeline = sharp(data, {
+        raw: { width: info.width, height: info.height, channels: info.channels },
+      });
+    }
+  }
+
+  pipeline = pipeline.rotate(rotation);
+
+  if (crop) {
+    const meta = await pipeline.metadata();
+    const left = Math.round((clampPercent(crop.x) / 100) * meta.width);
+    const top = Math.round((clampPercent(crop.y) / 100) * meta.height);
+    const width = Math.min(
+      Math.round((clampPercent(crop.width) / 100) * meta.width),
+      meta.width - left
+    );
+    const height = Math.min(
+      Math.round((clampPercent(crop.height) / 100) * meta.height),
+      meta.height - top
+    );
+    if (width < 1 || height < 1) throw new Error("Crop area is empty.");
+    pipeline = pipeline.extract({ left, top, width, height });
+  }
+
+  const { data: bytes, info } = await pipeline
+    .jpeg({ quality: JPEG_QUALITY, mozjpeg: true })
+    .toBuffer({ resolveWithObject: true });
+
+  const { error } = await getSupabase()
+    .storage.from(BUCKET)
+    .upload(row.storage_key, bytes, {
+      contentType: "image/jpeg",
+      upsert: true,
+      // Short: the object is overwritten in place, and for a page that has just
+      // gained a bar a stale cached copy is an uncensored copy.
+      cacheControl: "0",
+    });
+  if (error) throw new Error(error.message);
+
+  return { originalKey, width: info.width, height: info.height, byteSize: bytes.byteLength };
+}
+
+/**
+ * Set rotation and crop, keeping any existing bars.
+ *
+ * Geometry is re-derived from the pristine original every time, so repeated
+ * edits cost one re-encode from the scan as uploaded rather than compounding
+ * JPEG loss, and a crop can later be widened again.
  */
 export async function saveImageEdit({ pageId, rotation, crop }) {
   await requireAdmin();
@@ -48,76 +155,78 @@ export async function saveImageEdit({ pageId, rotation, crop }) {
   const row = await loadRow(id);
   if (!row) return { ok: false, message: "No such page." };
 
-  // First edit: preserve the scan as uploaded before overwriting anything.
-  let originalKey = row.original_key;
-  if (!originalKey) {
-    originalKey = originalKeyFor(row.storage_key);
-    const pristine = await download(row.storage_key);
-    const { error } = await getSupabase()
-      .storage.from(BUCKET)
-      .upload(originalKey, pristine, { contentType: "image/jpeg", upsert: true });
-    if (error) {
-      return { ok: false, message: `Could not preserve original: ${error.message}` };
-    }
-  }
+  const cleanCrop = crop ? sanitiseBox(crop) : null;
 
-  const source = await download(originalKey);
-  const rotated = sharp(source).rotate(rotation);
-  const meta = await rotated.metadata();
-
-  // Crop geometry is never trusted: it is resolved against the real rotated
-  // dimensions and clamped, so an out-of-bounds or inverted rect cannot reach
-  // sharp (where it would throw) or quietly produce something unintended.
-  let pipeline = rotated;
-  if (crop) {
-    const left = Math.round((clampPercent(crop.x) / 100) * meta.width);
-    const top = Math.round((clampPercent(crop.y) / 100) * meta.height);
-    const width = Math.round((clampPercent(crop.width) / 100) * meta.width);
-    const height = Math.round((clampPercent(crop.height) / 100) * meta.height);
-
-    const w = Math.min(width, meta.width - left);
-    const h = Math.min(height, meta.height - top);
-    if (w < 1 || h < 1) return { ok: false, message: "Crop area is empty." };
-
-    pipeline = rotated.extract({ left, top, width: w, height: h });
-  }
-
-  const { data: bytes, info } = await pipeline
-    .jpeg({ quality: JPEG_QUALITY, mozjpeg: true })
-    .toBuffer({ resolveWithObject: true });
-
-  const db = getSupabase();
-  const { error: uploadError } = await db.storage
-    .from(BUCKET)
-    .upload(row.storage_key, bytes, {
-      contentType: "image/jpeg",
-      upsert: true,
-      // Short-lived: the object is overwritten in place, so a long CDN cache
-      // would keep handing out the pre-edit image.
-      cacheControl: "60",
+  try {
+    const result = await publish(row, {
+      rotation,
+      crop: cleanCrop,
+      // Carried through: dropping them here would republish the page uncensored.
+      boxes: row.redaction_boxes ?? [],
     });
-  if (uploadError) return { ok: false, message: uploadError.message };
-
-  const { error: rowError } = await db
-    .from("pages")
-    .update({
-      original_key: originalKey,
+    await writeRow(id, {
+      original_key: result.originalKey,
       edit_rotation: rotation,
-      edit_crop: crop ?? null,
-      width: info.width,
-      height: info.height,
-      byte_size: bytes.byteLength,
+      edit_crop: cleanCrop,
+      width: result.width,
+      height: result.height,
+      byte_size: result.byteSize,
       updated_at: new Date().toISOString(),
-    })
-    .eq("diary_id", DIARY_ID)
-    .eq("page_id", id);
-  if (rowError) return { ok: false, message: rowError.message };
-
-  revalidateEverything();
-  return { ok: true, width: info.width, height: info.height };
+    });
+    return { ok: true, width: result.width, height: result.height };
+  } catch (error) {
+    return { ok: false, message: error.message };
+  }
 }
 
-/** Restore the scan as uploaded and clear the edit parameters. */
+/**
+ * Replace the page's redaction bars.
+ *
+ * Boxes arrive in ORIGINAL coordinates (the editor converts from whatever
+ * rotation it is displaying). Passing an empty list removes every bar and
+ * republishes the page uncensored -- deliberate, and the reason the original is
+ * kept rather than destroyed.
+ */
+export async function setRedactionBoxes({ pageId, boxes }) {
+  await requireAdmin();
+
+  const id = Number(pageId);
+  if (!Number.isInteger(id) || id < 1) return { ok: false, message: "Invalid page." };
+  if (!Array.isArray(boxes)) return { ok: false, message: "Invalid bars." };
+  if (boxes.length > MAX_BARS) {
+    return { ok: false, message: `At most ${MAX_BARS} bars.` };
+  }
+
+  const clean = boxes.map(sanitiseBox).filter(Boolean);
+  if (boxes.length > 0 && clean.length === 0) {
+    return { ok: false, message: "Those bars have no usable area." };
+  }
+
+  const row = await loadRow(id);
+  if (!row) return { ok: false, message: "No such page." };
+
+  try {
+    const result = await publish(row, {
+      rotation: row.edit_rotation ?? 0,
+      crop: row.edit_crop ?? null,
+      boxes: clean,
+    });
+    await writeRow(id, {
+      original_key: result.originalKey,
+      redaction_boxes: clean.length ? clean : null,
+      redacted_at: clean.length ? new Date().toISOString() : null,
+      width: result.width,
+      height: result.height,
+      byte_size: result.byteSize,
+      updated_at: new Date().toISOString(),
+    });
+    return { ok: true, bars: clean.length };
+  } catch (error) {
+    return { ok: false, message: error.message };
+  }
+}
+
+/** Clear rotation and cropping. Bars are kept -- removing those is separate. */
 export async function revertImage({ pageId }) {
   await requireAdmin();
 
@@ -129,45 +238,34 @@ export async function revertImage({ pageId }) {
     return { ok: false, message: "This page has no stored original." };
   }
 
-  // Re-encoded rather than copied byte-for-byte so the recorded dimensions come
-  // from the image itself instead of being trusted from elsewhere.
-  const source = await download(row.original_key);
-  const { data: bytes, info } = await sharp(source)
-    .jpeg({ quality: JPEG_QUALITY, mozjpeg: true })
-    .toBuffer({ resolveWithObject: true });
-
-  const db = getSupabase();
-  const { error: uploadError } = await db.storage
-    .from(BUCKET)
-    .upload(row.storage_key, bytes, {
-      contentType: "image/jpeg",
-      upsert: true,
-      cacheControl: "60",
+  try {
+    const result = await publish(row, {
+      rotation: 0,
+      crop: null,
+      boxes: row.redaction_boxes ?? [],
     });
-  if (uploadError) return { ok: false, message: uploadError.message };
-
-  const { error: rowError } = await db
-    .from("pages")
-    .update({
+    await writeRow(id, {
       edit_rotation: 0,
       edit_crop: null,
-      width: info.width,
-      height: info.height,
-      byte_size: bytes.byteLength,
+      width: result.width,
+      height: result.height,
+      byte_size: result.byteSize,
       updated_at: new Date().toISOString(),
-    })
-    .eq("diary_id", DIARY_ID)
-    .eq("page_id", id);
-  if (rowError) return { ok: false, message: rowError.message };
-
-  revalidateEverything();
-  return { ok: true };
+    });
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, message: error.message };
+  }
 }
 
-function clampPercent(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return 0;
-  return Math.min(100, Math.max(0, n));
+async function writeRow(pageId, patch) {
+  const { error } = await getSupabase()
+    .from("pages")
+    .update(patch)
+    .eq("diary_id", DIARY_ID)
+    .eq("page_id", pageId);
+  if (error) throw new Error(error.message);
+  revalidateEverything();
 }
 
 function revalidateEverything() {

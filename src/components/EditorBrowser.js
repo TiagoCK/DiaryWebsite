@@ -36,7 +36,10 @@ function EditButtons({ view }) {
         return (
           <Link key={page.pageId} className="edittools__btn" href={`/admin/editor/${page.pageId}`}>
             {label}
-            {page.hasOriginal && <span className="edittools__flag">edited</span>}
+            {page.isRedacted && <span className="edittools__flag edittools__flag--redacted">redacted</span>}
+            {page.hasOriginal && !page.isRedacted && (
+              <span className="edittools__flag">edited</span>
+            )}
           </Link>
         );
       })}

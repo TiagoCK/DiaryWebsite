@@ -99,6 +99,7 @@ function readLocalPages() {
     rotation: 0,
     crop: null,
     updatedAt: null,
+    isRedacted: false,
   }));
 }
 
@@ -106,9 +107,12 @@ async function readSupabasePages() {
   const { getSupabase } = await import("./supabase.js");
   const { data, error } = await getSupabase()
     .from("pages")
-    .select(
-      "page_id, page_count, width, height, first_line, original_key, edit_rotation, edit_crop, updated_at"
-    )
+    // select("*") rather than a column list, deliberately. Naming columns makes
+    // the app hard-fail the moment the code is ahead of the database -- the gap
+    // between deploying a change and running its migration -- and the failure is
+    // total, because every page calls this. With "*" a not-yet-added column is
+    // simply absent and the mapping below falls back to a default.
+    .select("*")
     .eq("diary_id", DIARY_ID)
     .order("page_id", { ascending: true });
 
@@ -124,5 +128,6 @@ async function readSupabasePages() {
     rotation: row.edit_rotation ?? 0,
     crop: row.edit_crop ?? null,
     updatedAt: row.updated_at ?? null,
+    isRedacted: Boolean(row.redacted_at),
   }));
 }
