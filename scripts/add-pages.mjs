@@ -20,18 +20,16 @@
 
 import { readFile, readdir, rename, copyFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import sharp from "sharp";
 
 import { DIARY_ID, MANIFEST, storageKeyFor } from "../src/lib/pages.js";
+import { analyse, IMAGE_EXTENSIONS, nextFreePageId } from "../src/lib/ingest.js";
 import { BUCKET, getSupabase } from "../src/lib/supabase.js";
 
 const SCANS_DIR = path.join(process.cwd(), "images");
 const INCOMING_DIR = path.join(SCANS_DIR, "incoming");
 const MANIFEST_FILE = path.join(process.cwd(), "src", "lib", "manifest.generated.json");
 
-const MAX_WIDTH = 1600;
-const JPEG_QUALITY = 85;
-const EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"]);
+const EXTENSIONS = IMAGE_EXTENSIONS;
 
 const argv = process.argv.slice(2);
 const commit = argv.includes("--commit");
@@ -60,66 +58,29 @@ function namesFromFlag(flag) {
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
 /**
- * Normalise one scan and work out what it is.
+ * Read one incoming scan and hand it to the shared pipeline.
  *
- * .rotate() with no argument bakes in the file's EXIF orientation and drops the
- * tag, so nothing downstream has to interpret it. The scans in this diary carry
- * orientation 6 AND 8, so anything that strips EXIF without baking would leave
- * some spreads turned the opposite way from the rest.
+ * analyse() itself lives in src/lib/ingest.js so the in-app uploader runs the
+ * identical code -- EXIF baking, the width cap, the JPEG settings and the
+ * single/spread rule are all decided in one place.
  */
-async function analyse(fileName) {
+async function analyseFile(fileName) {
   const original = await readFile(path.join(INCOMING_DIR, fileName));
-  const meta = await sharp(original).metadata();
 
-  // Display dimensions of the file as it will sit in images/. metadata() reports
-  // the stored dimensions, which for an EXIF-rotated scan are the wrong way
-  // round -- orientations 5..8 mean a quarter turn, so they swap.
-  const turned = meta.orientation >= 5 && meta.orientation <= 8;
-  const sourceWidth = turned ? meta.height : meta.width;
-  const sourceHeight = turned ? meta.width : meta.height;
+  // The flags are per filename here; ingest.js takes the resolved answer.
+  let pageCountOverride;
+  if (forcedSingle.has(fileName)) pageCountOverride = 1;
+  if (forcedSpread.has(fileName)) pageCountOverride = 2;
 
-  const pipeline = sharp(original).rotate();
-  if (sourceWidth > MAX_WIDTH) pipeline.resize({ width: MAX_WIDTH, withoutEnlargement: true });
+  const scan = await analyse(original, { pageCountOverride });
 
-  const { data, info } = await pipeline
-    .jpeg({ quality: JPEG_QUALITY, mozjpeg: true })
-    .toBuffer({ resolveWithObject: true });
-
-  // An open book photographed as one image comes out wider than it is tall; a
-  // single page is portrait. This matches every scan already in the diary.
-  let pageCount = sourceWidth > sourceHeight ? 2 : 1;
-  if (forcedSingle.has(fileName)) pageCount = 1;
-  if (forcedSpread.has(fileName)) pageCount = 2;
-  const forced = forcedSingle.has(fileName) || forcedSpread.has(fileName);
-
+  // The script's asterisk marks "a flag was given", not "the flag disagreed
+  // with the guess", which is what ingest.js reports.
   return {
+    ...scan,
     fileName,
-    bytes: data,
-    pageCount,
-    forced,
-    // For the database: what the site will actually serve.
-    width: info.width,
-    height: info.height,
-    byteSize: data.byteLength,
-    // For the manifest: the master that stays in images/, which is larger
-    // whenever the upload downscaled it.
-    sourceWidth,
-    sourceHeight,
-    originalSize: original.byteLength,
+    forced: forcedSingle.has(fileName) || forcedSpread.has(fileName),
   };
-}
-
-/** The first page number not already spoken for. */
-async function nextFreePageId(supabase) {
-  const { data, error } = await supabase
-    .from("pages")
-    .select("page_id, page_count")
-    .eq("diary_id", DIARY_ID)
-    .order("page_id", { ascending: false })
-    .limit(1);
-  if (error) throw new Error(`Could not read existing pages: ${error.message}`);
-  if (!data?.length) return 1;
-  return data[0].page_id + (data[0].page_count ?? 1);
 }
 
 async function listIncoming() {
@@ -190,7 +151,7 @@ async function main() {
 
   const planned = [];
   for (const name of names) {
-    const scan = await analyse(name);
+    const scan = await analyseFile(name);
     planned.push({ ...scan, pageId });
     pageId += scan.pageCount;
   }
@@ -246,6 +207,9 @@ async function main() {
 
     added.push({
       file: p.fileName,
+      // The join back to a database row. `file` means nothing to Postgres and
+      // `pageId` changes whenever pages are reordered, so neither can be it.
+      storageKey: key,
       pageId: p.pageId,
       pageCount: p.pageCount,
       width: p.sourceWidth,

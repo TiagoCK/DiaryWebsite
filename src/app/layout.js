@@ -26,10 +26,18 @@ export default async function RootLayout({ children }) {
                   {user.email}
                   <span className={`badge badge--${user.role}`}>{user.role}</span>
                 </span>
+                <Link className="topbar__link" href="/search">
+                  Search
+                </Link>
                 {user.isAdmin && (
-                  <Link className="topbar__link" href="/admin">
-                    Admin
-                  </Link>
+                  <>
+                    <Link className="topbar__link" href="/admin/upload">
+                      Upload
+                    </Link>
+                    <Link className="topbar__link" href="/admin">
+                      Admin
+                    </Link>
+                  </>
                 )}
                 <form action="/auth/signout" method="post">
                   <button type="submit" className="topbar__signout">

@@ -90,3 +90,24 @@ export function totalPages(pages) {
   const last = pages[pages.length - 1];
   return last.pageId + last.pageCount - 1;
 }
+
+/**
+ * The index of the view containing a page number, or -1 if no view holds it.
+ *
+ * Interior numbers resolve to their frame rather than being refused: asking for
+ * page 4 shows the spread at pages 3-4. That is deliberately the opposite of
+ * src/lib/ordering.js, which rejects an interior number -- reordering has to
+ * know which *scan* you mean, while reading only has to know which *frame*.
+ */
+export function viewIndexForPage(views, pageNumber) {
+  if (!Number.isInteger(pageNumber)) return -1;
+
+  for (const view of views) {
+    const first = view.pages[0].pageId;
+    const last = view.pages[view.pages.length - 1];
+    if (pageNumber >= first && pageNumber <= last.pageId + last.pageCount - 1) {
+      return view.index;
+    }
+  }
+  return -1;
+}

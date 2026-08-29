@@ -1,7 +1,7 @@
 import BookViewer from "@/components/BookViewer";
 import { requireUser } from "@/lib/auth";
 import { getPages } from "@/lib/pages";
-import { buildViews, frameAspect, totalPages } from "@/lib/views";
+import { buildViews, frameAspect, totalPages, viewIndexForPage } from "@/lib/views";
 
 /**
  * Rendered per request, never prerendered at build time.
@@ -12,7 +12,7 @@ import { buildViews, frameAspect, totalPages } from "@/lib/views";
  */
 export const dynamic = "force-dynamic";
 
-export default async function Home() {
+export default async function Home({ searchParams }) {
   // Checked here, not just in the middleware -- see src/middleware.js.
   await requireUser();
 
@@ -20,9 +20,24 @@ export default async function Home() {
   const pages = await getPages();
   const views = buildViews(pages);
 
+  // ?page=N opens the diary at that page, which is what a /search result links
+  // to. An unknown or malformed number falls back to the beginning rather than
+  // erroring -- it arrives from a URL anyone can edit.
+  const { page } = await searchParams;
+  const requested = Number(Array.isArray(page) ? page[0] : page);
+  const found = Number.isInteger(requested) ? viewIndexForPage(views, requested) : -1;
+  const initialIndex = found < 0 ? 0 : found;
+
   return (
     <div style={{ "--frame-aspect": frameAspect(views) }}>
-      <BookViewer views={views} totalPages={totalPages(pages)} />
+      {/* Keyed on the deep link: the viewer holds its position in state, so
+          without this a second /?page= navigation would leave it where it was. */}
+      <BookViewer
+        key={initialIndex}
+        views={views}
+        totalPages={totalPages(pages)}
+        initialIndex={initialIndex}
+      />
     </div>
   );
 }

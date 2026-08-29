@@ -270,6 +270,62 @@ export async function revertImage({ pageId }) {
   }
 }
 
+/**
+ * Remove a page and close the gap it leaves.
+ *
+ * The delete and the renumber happen inside one SQL function (0006) so they
+ * cannot half-apply: a hole in the numbering is not something the app can
+ * repair afterwards -- the Order tab swaps scans, it does not renumber around a
+ * missing one.
+ *
+ * Irreversible, and it takes the first line and any censor bars with it, so the
+ * caller has to say confirm. The master in images/ is deliberately left alone:
+ * that is the only full-resolution copy, and deleting someone's master because
+ * they tidied a page out of the diary is not a decision this should make.
+ */
+export async function deletePage({ pageId, confirm }) {
+  await requireAdmin();
+
+  const id = Number(pageId);
+  if (!Number.isInteger(id) || id < 1) return { ok: false, message: "Invalid page." };
+  if (confirm !== true) return { ok: false, message: "Not confirmed." };
+
+  const row = await loadRow(id);
+  if (!row) return { ok: false, message: "No such page." };
+
+  const span =
+    row.page_count === 1
+      ? `page ${row.page_id}`
+      : `pages ${row.page_id}–${row.page_id + row.page_count - 1}`;
+
+  const db = getSupabase();
+
+  const { data: lastPage, error } = await db.rpc("delete_diary_page", {
+    p_diary_id: DIARY_ID,
+    p_storage_key: row.storage_key,
+  });
+  if (error) return { ok: false, message: error.message };
+
+  // After the row is gone, not before. An object with no row is invisible and
+  // sweepable; a row pointing at a deleted object is a broken page in the
+  // reader. If this fails the removal still stands, so it is reported rather
+  // than thrown.
+  const keys = [row.storage_key, row.original_key].filter(Boolean);
+  const { error: storageError } = await db.storage.from(BUCKET).remove(keys);
+
+  revalidateEverything();
+
+  return {
+    ok: true,
+    lastPage,
+    message:
+      `Removed ${span}. The diary now ends at page ${lastPage}.` +
+      (storageError
+        ? ` The stored image could not be deleted (${storageError.message}); the page is gone but the file remains.`
+        : ""),
+  };
+}
+
 async function writeRow(pageId, patch) {
   const { error } = await getSupabase()
     .from("pages")
@@ -282,6 +338,8 @@ async function writeRow(pageId, patch) {
 
 function revalidateEverything() {
   revalidatePath("/");
-  revalidatePath("/admin/editor");
-  revalidatePath("/admin/pages");
+  // The whole admin subtree, not three named routes. Removing a page renumbers
+  // everything after it, so the Order tab, the Upload tab's "next page number"
+  // and every /admin/editor/[pageId] URL are all affected.
+  revalidatePath("/admin", "layout");
 }

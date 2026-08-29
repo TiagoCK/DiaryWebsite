@@ -5,7 +5,12 @@ import { useRouter } from "next/navigation";
 import ReactCrop from "react-image-crop";
 import "react-image-crop/dist/ReactCrop.css";
 
-import { revertImage, saveImageEdit, setRedactionBoxes } from "@/app/admin/editor/actions";
+import {
+  deletePage,
+  revertImage,
+  saveImageEdit,
+  setRedactionBoxes,
+} from "@/app/admin/editor/actions";
 import { toOriginalSpace, toRotatedSpace } from "@/lib/redaction";
 
 /** Below this (percent of the image) a drag is treated as a stray click. */
@@ -47,7 +52,21 @@ export default function ImageEditor({ page }) {
    */
   const [seeThrough, setSeeThrough] = useState(false);
 
+  // Two steps, because this cannot be undone and the button sits beside Save.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
   const sourceRef = useRef(null);
+  /*
+   * The source image's natural size, in state rather than read off sourceRef
+   * during render.
+   *
+   * The ref still holds the Image for redraw() to paint from -- that runs in
+   * handlers, which is what refs are for. But rendering from ref.current only
+   * worked because the same onload happened to call setPreview: React had no
+   * idea the ref had changed. Remove that incidental state update and the
+   * editor would render with no known size.
+   */
+  const [sourceSize, setSourceSize] = useState(null);
 
   const isSpread = page.pageCount === 2;
   const label = isSpread ? `Pages ${page.pageId}–${page.pageId + 1}` : `Page ${page.pageId}`;
@@ -58,10 +77,17 @@ export default function ImageEditor({ page }) {
   // clamped a box, and without this the local state keeps the unclamped values:
   // the "unsaved" badge would never clear, and the bar drawn on screen would be
   // wider than the one actually burned into the published image.
-  useEffect(() => {
+  //
+  // Adjusted during render rather than in an effect. React re-runs this
+  // component immediately, before the browser paints, so the bars never flash
+  // at their old geometry -- an effect would show one frame of the unclamped
+  // box first.
+  const [syncedBoxes, setSyncedBoxes] = useState(serverBoxes);
+  if (syncedBoxes !== serverBoxes) {
+    setSyncedBoxes(serverBoxes);
     setBoxes(JSON.parse(serverBoxes));
     setSelected(null);
-  }, [serverBoxes]);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -69,6 +95,7 @@ export default function ImageEditor({ page }) {
     img.onload = () => {
       if (cancelled) return;
       sourceRef.current = img;
+      setSourceSize({ width: img.naturalWidth, height: img.naturalHeight });
       setStatus(null);
       redraw(img, page.rotation ?? 0, setPreview);
     };
@@ -127,7 +154,7 @@ export default function ImageEditor({ page }) {
     setSelection(undefined);
   }
 
-  const rotatedSize = getRotatedSize(sourceRef.current, rotation);
+  const rotatedSize = getRotatedSize(sourceSize, rotation);
   const outputSize = getOutputSize(rotatedSize, crop);
   const shownBoxes = boxes.map((b) => toRotatedSpace(b, rotation));
 
@@ -165,6 +192,14 @@ export default function ImageEditor({ page }) {
         setCrop(undefined);
         if (sourceRef.current) redraw(sourceRef.current, 0, setPreview);
       }
+    );
+
+  // Navigates away rather than refreshing: every page after this one has just
+  // been renumbered, so this URL now addresses a different scan.
+  const onDelete = () =>
+    run(
+      () => deletePage({ pageId: page.pageId, confirm: true }),
+      () => router.push("/admin/editor")
     );
 
   const onSaveBars = () =>
@@ -466,7 +501,49 @@ export default function ImageEditor({ page }) {
             {dirtyBars && !pending && <span className="editor__unsaved">unsaved</span>}
           </button>
         )}
+
+        {/* Pushed to the far end, away from Save. */}
+        <button
+          type="button"
+          className="editor__remove"
+          onClick={() => setConfirmingDelete((on) => !on)}
+          disabled={pending}
+          aria-expanded={confirmingDelete}
+        >
+          {confirmingDelete ? "Keep this page" : "Remove page…"}
+        </button>
       </div>
+
+      {confirmingDelete && (
+        <div className="editor__danger" role="alert">
+          <p>
+            <strong>
+              Remove{" "}
+              {page.pageCount === 1
+                ? `page ${page.pageId}`
+                : `pages ${page.pageId}–${page.pageId + page.pageCount - 1}`}
+              ?
+            </strong>{" "}
+            The scan, its first line
+            {page.boxes?.length ? `, its ${page.boxes.length} censor bar(s)` : ""} and
+            any stored original are deleted. This cannot be undone.
+          </p>
+          <p className="editor__note">
+            Every later page moves {page.pageCount === 1 ? "down one" : "down two"} so
+            the numbering stays gapless — page numbers you have written down
+            elsewhere will shift. Your master file in <code>images/</code> is left
+            where it is.
+          </p>
+          <button
+            type="button"
+            className="editor__remove editor__remove--confirm"
+            onClick={onDelete}
+            disabled={pending}
+          >
+            {pending ? "Removing…" : "Yes, remove it"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -488,12 +565,12 @@ function redraw(img, rotation, setPreview) {
   setPreview(canvas.toDataURL("image/jpeg", 0.9));
 }
 
-function getRotatedSize(img, rotation) {
-  if (!img) return null;
+function getRotatedSize(size, rotation) {
+  if (!size) return null;
   const swap = rotation === 90 || rotation === 270;
   return {
-    width: swap ? img.naturalHeight : img.naturalWidth,
-    height: swap ? img.naturalWidth : img.naturalHeight,
+    width: swap ? size.height : size.width,
+    height: swap ? size.width : size.height,
   };
 }
 

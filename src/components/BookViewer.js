@@ -1,9 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { halfOf } from "@/lib/views";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import HighlightedLine from "@/components/HighlightedLine";
+import { searchPages } from "@/lib/search";
+import { halfOf, viewIndexForPage } from "@/lib/views";
 
 const FLIP_MS = 600;
+
+/** Enough to be useful without turning the viewer into a list; the rest are counted. */
+const MAX_RESULTS = 8;
 
 /** One half of the open book: half a spread, a whole single page, or blank. */
 function Half({ half }) {
@@ -27,11 +32,23 @@ function Half({ half }) {
   );
 }
 
-export default function BookViewer({ views, totalPages, animate = true, renderToolbar }) {
-  const [index, setIndex] = useState(0);
+export default function BookViewer({
+  views,
+  totalPages,
+  animate = true,
+  renderToolbar,
+  initialIndex = 0,
+}) {
+  // Only the starting point. /?page=N is resolved on the server; the component
+  // is keyed on it there, so arriving at a second deep link remounts rather
+  // than being ignored by this initialiser.
+  const [index, setIndex] = useState(initialIndex);
   // null at rest; otherwise { dir, target, phase } for the flip in flight.
   const [flip, setFlip] = useState(null);
   const [reducedMotion, setReducedMotion] = useState(false);
+  const [jumpValue, setJumpValue] = useState("");
+  const [jumpError, setJumpError] = useState("");
+  const [query, setQuery] = useState("");
 
   // The admin editor turns the flip off: 600ms per step is tiring when you are
   // stepping through looking for scans to fix. Reuses the reduced-motion branch
@@ -42,6 +59,13 @@ export default function BookViewer({ views, totalPages, animate = true, renderTo
   const flipRef = useRef(null);
   const leafRef = useRef(null);
   const timerRef = useRef(null);
+  const jumpId = useId();
+  const searchId = useId();
+
+  // Results are per PAGE, not per view: a paired view holds two single pages
+  // with a first line each, and saying which one matched is the useful part.
+  const allPages = useMemo(() => views.flatMap((view) => view.pages), [views]);
+  const matches = useMemo(() => searchPages(allPages, query), [allPages, query]);
 
   useEffect(() => {
     const query = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -62,20 +86,24 @@ export default function BookViewer({ views, totalPages, animate = true, renderTo
     setFlip(null);
   }, []);
 
-  const go = useCallback(
-    (dir) => {
+  /** Move to a view by index, animating only when it is the next one along. */
+  const goToIndex = useCallback(
+    (target) => {
       // A flip already running owns the leaf; a second one would animate from
       // a half-rotated state.
       if (flipRef.current) return;
-      const target = dir === "next" ? index + 1 : index - 1;
-      if (target < 0 || target >= views.length) return;
+      if (target < 0 || target >= views.length || target === index) return;
 
-      if (skipAnimation) {
+      const step = target - index;
+
+      // The leaf turns exactly one view, so a jump further than that has no
+      // leaf to turn and lands directly.
+      if (skipAnimation || Math.abs(step) !== 1) {
         setIndex(target);
         return;
       }
 
-      const next = { dir, target, phase: "start" };
+      const next = { dir: step === 1 ? "next" : "prev", target, phase: "start" };
       flipRef.current = next;
       setFlip(next);
 
@@ -88,6 +116,11 @@ export default function BookViewer({ views, totalPages, animate = true, renderTo
     [index, views.length, skipAnimation, settle]
   );
 
+  const go = useCallback(
+    (dir) => goToIndex(dir === "next" ? index + 1 : index - 1),
+    [goToIndex, index]
+  );
+
   // Commit the leaf's starting angle before moving it, or the browser collapses
   // both styles into one recalculation and nothing animates. Reading the
   // computed style forces that flush; rAF would be tidier but never fires while
@@ -97,11 +130,31 @@ export default function BookViewer({ views, totalPages, animate = true, renderTo
     if (leafRef.current) getComputedStyle(leafRef.current).transform;
     const running = { ...flip, phase: "run" };
     flipRef.current = running;
+    // The cascading render the linter warns about is the mechanism here, not a
+    // mistake: the leaf has to be committed at its starting angle with no
+    // transition, the browser has to recalculate, and only then can the angle
+    // change with a transition attached. One render cannot express that, and
+    // adjusting state during render would not give the browser its flush.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setFlip(running);
   }, [flip]);
 
   useEffect(() => {
     const onKey = (event) => {
+      // Left and Right are caret movement inside a text field, and the jump
+      // input sits in these very controls. Without this, typing a page number
+      // would flip the book and preventDefault() would freeze the caret.
+      const el = event.target;
+      if (
+        el instanceof HTMLElement &&
+        (el.isContentEditable ||
+          el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.tagName === "SELECT")
+      ) {
+        return;
+      }
+
       if (event.key === "ArrowRight") go("next");
       else if (event.key === "ArrowLeft") go("prev");
       else return;
@@ -110,6 +163,33 @@ export default function BookViewer({ views, totalPages, animate = true, renderTo
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [go]);
+
+  const onJump = (event) => {
+    event.preventDefault();
+    if (flipRef.current) return;
+
+    const raw = jumpValue.trim();
+    const numeric = /^\d+$/.test(raw);
+    const target = numeric ? viewIndexForPage(views, Number(raw)) : -1;
+
+    if (target < 0) {
+      // A number inside the range that still matches no view means a gap left
+      // by a deleted page. Saying so beats repeating the range back at someone
+      // who already typed something inside it.
+      setJumpError(
+        numeric && Number(raw) >= 1 && Number(raw) <= totalPages
+          ? `There is no page ${raw} in this diary.`
+          : `Pages run 1–${totalPages}.`
+      );
+      return;
+    }
+
+    // Cleared rather than left showing what was typed: the counter beside it
+    // already says where you are, and the field is ready for the next jump.
+    setJumpError("");
+    setJumpValue("");
+    goToIndex(target);
+  };
 
   // An empty diary is a reachable state -- a fresh project before the first
   // upload, or every page deleted. Without this, views[0] is undefined and
@@ -187,9 +267,47 @@ export default function BookViewer({ views, totalPages, animate = true, renderTo
         <button type="button" onClick={() => go("prev")} disabled={index === 0 || !!flip}>
           &larr; Previous
         </button>
-        <span className="counter" aria-live="polite">
-          {current.label} <span className="counter__total">of {totalPages}</span>
-        </span>
+        {/* Counter and jump field are one flex child, so .controls keeps its
+            three columns and Previous/Next stay pinned to the edges. */}
+        <div className="controls__center">
+          <span className="counter" aria-live="polite">
+            {current.label} <span className="counter__total">of {totalPages}</span>
+          </span>
+
+          {/* noValidate, with min/max kept for the spinner and screen readers:
+              otherwise the browser blocks submit on an out-of-range number and
+              onJump never runs, so the message below could only ever report a
+              gap. One rule, one place, one wording. */}
+          <form className="jump" onSubmit={onJump} noValidate>
+            <label className="jump__label" htmlFor={jumpId}>
+              Go to page
+            </label>
+            <input
+              id={jumpId}
+              className="jump__input"
+              type="number"
+              min="1"
+              max={totalPages}
+              inputMode="numeric"
+              value={jumpValue}
+              placeholder={String(current.pages[0].pageId)}
+              onChange={(event) => {
+                setJumpValue(event.target.value);
+                setJumpError("");
+              }}
+            />
+            <button type="submit" disabled={!!flip}>
+              Go
+            </button>
+          </form>
+
+          {/* Always rendered so it is an established live region; hidden by
+              .jump__msg:empty until there is something to announce. */}
+          <p className="jump__msg" role="status">
+            {jumpError}
+          </p>
+        </div>
+
         <button
           type="button"
           onClick={() => go("next")}
@@ -199,12 +317,69 @@ export default function BookViewer({ views, totalPages, animate = true, renderTo
         </button>
       </nav>
 
+      {/* Filters the pages already in memory -- no request, so results appear as
+          you type and you never leave the page you are reading. */}
+      <section className="search">
+        <label className="search__label" htmlFor={searchId}>
+          Search first lines
+        </label>
+        <input
+          id={searchId}
+          className="search__input"
+          type="search"
+          value={query}
+          placeholder="a word from the first line&hellip;"
+          autoComplete="off"
+          onChange={(event) => setQuery(event.target.value)}
+        />
+
+        {query.trim() !== "" && (
+          <div className="search__results" role="status">
+            {matches.length === 0 ? (
+              <p className="search__empty">
+                Nothing matches. Only pages with a first line typed in can be found.
+              </p>
+            ) : (
+              <>
+                <ul className="search__list">
+                  {matches.slice(0, MAX_RESULTS).map((page) => {
+                    const target = viewIndexForPage(views, page.pageId);
+                    const span =
+                      page.pageCount === 1
+                        ? `page ${page.pageId}`
+                        : `pages ${page.pageId}–${page.pageId + page.pageCount - 1}`;
+                    return (
+                      <li key={page.contentId}>
+                        <button
+                          type="button"
+                          className="search__hit"
+                          disabled={!!flip || target === index}
+                          onClick={() => goToIndex(target)}
+                        >
+                          <span className="search__span">{span}</span>
+                          <HighlightedLine text={page.firstLine} query={query} />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {matches.length > MAX_RESULTS && (
+                  <p className="search__more">
+                    and {matches.length - MAX_RESULTS} more
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </section>
+
       {/* Only the immediate neighbours are fetched ahead, so a flip never stalls
           while the rest of the diary stays unrequested. */}
       <div className="preload" aria-hidden="true">
         {neighbours.flatMap((view) =>
           view.pages.map((page) => (
-            <img key={page.pageId} src={page.src} alt="" decoding="async" />
+            <img key={page.contentId} src={page.src} alt="" decoding="async" />
           ))
         )}
       </div>

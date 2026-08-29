@@ -216,6 +216,13 @@ h1, h2 {
   cursor: default;
 }
 
+.controls__center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+}
+
 .counter {
   color: var(--muted);
   font-size: 0.95rem;
@@ -224,6 +231,46 @@ h1, h2 {
 
 .counter__total {
   opacity: 0.7;
+}
+
+.jump {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.jump__label {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.jump__input {
+  width: 4.5rem;
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.3rem 0.5rem;
+  color: var(--foreground);
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+}
+
+/* Inherits .controls button, so it matches Previous/Next; just smaller. */
+.controls .jump button {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.85rem;
+}
+
+.jump__msg {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+/* Present in the DOM at all times so screen readers treat it as a live
+   region, but taking up no room until it has something to say. */
+.jump__msg:empty {
+  display: none;
 }
 
 /* Neighbour prefetch: fetched, never shown. */
@@ -933,4 +980,484 @@ h1, h2 {
   .actionform__error {
     color: #f2b8b5;
   }
+}
+
+/* ---------- order list ---------- */
+
+.order__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.order__row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.6rem 0.8rem;
+  flex-wrap: wrap;
+}
+
+.order__thumb {
+  flex: 0 0 auto;
+  width: 84px;
+  height: 60px;
+  object-fit: cover;
+  object-position: top;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--paper);
+}
+
+.order__meta {
+  flex: 1 1 12rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.order__span {
+  font-size: 0.9rem;
+}
+
+.order__line {
+  font-size: 0.82rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.order__form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.order__form label {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.order__form input[type="number"] {
+  font: inherit;
+  font-size: 0.9rem;
+  width: 5rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.order__form button {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.85rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.order__form .actionform__error,
+.order__form .actionform__ok {
+  flex: 1 1 100%;
+}
+
+/* ---------- search ---------- */
+
+/* Matched text, wherever a first line is shown. <mark>'s default yellow fights
+   the paper palette and vanishes in dark mode, so it is restyled here rather
+   than left to the browser. */
+.hit__mark {
+  background: var(--rule);
+  color: var(--foreground);
+  font-weight: 600;
+  border-radius: 2px;
+  padding: 0 0.12em;
+}
+
+.hit__line {
+  font-size: 0.9rem;
+}
+
+/* In-viewer live filter */
+.search {
+  margin-top: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.search__label {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.search__input {
+  font: inherit;
+  font-size: 0.9rem;
+  width: min(24rem, 100%);
+  padding: 0.4rem 0.6rem;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+}
+
+.search__results {
+  width: min(34rem, 100%);
+}
+
+.search__empty,
+.search__more {
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-align: center;
+  margin: 0.5rem 0 0;
+}
+
+.search__list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.search__hit {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  text-align: left;
+  font: inherit;
+  color: var(--foreground);
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.45rem 0.7rem;
+  cursor: pointer;
+}
+
+.search__hit:hover:not(:disabled) {
+  background: var(--paper);
+}
+
+/* The page you are already on: still listed, so the result set does not shift
+   under you, but not clickable. */
+.search__hit:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.search__span {
+  flex: 0 0 auto;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+/* Shareable /search page */
+.searchpage {
+  margin-top: 1.5rem;
+}
+
+.searchpage h2 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  margin: 0 0 0.35rem;
+}
+
+.searchpage__form,
+.pagesearch {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 1rem;
+}
+
+.searchpage__label,
+.pagesearch__label {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.searchpage__form input[type="search"],
+.pagesearch input[type="search"] {
+  flex: 1 1 12rem;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.6rem;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+}
+
+.searchpage__form button,
+.pagesearch button {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.pagesearch__toggle {
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-decoration: none;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.4rem 0.85rem;
+}
+
+.pagesearch__toggle--on {
+  color: var(--foreground);
+  background: var(--paper);
+}
+
+.searchpage__count,
+.searchpage__empty {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0 0 0.75rem;
+}
+
+.searchpage__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.searchpage__hit {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  text-decoration: none;
+  color: var(--foreground);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+}
+
+.searchpage__hit:hover {
+  background: var(--paper);
+}
+
+.searchpage__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+/* The match beside the editable box on the admin index. */
+.admin__match {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin: 0.25rem 0 0 9.25rem;
+}
+
+/* The notes now carry inline links (page index, reader). Nothing sets a global
+   anchor colour, so without this they render browser-default blue against a
+   warm paper palette. */
+.admin__note a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ---------- upload ---------- */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.upload__pick {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 0 0 1rem;
+}
+
+.upload__label {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.upload__pick input[type="file"] {
+  font: inherit;
+  font-size: 0.85rem;
+  min-width: 0;
+  flex: 1 1 14rem;
+  color: var(--foreground);
+}
+
+.upload__pick button,
+.upload__commit button {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.upload__pick button:disabled,
+.upload__commit button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.upload__list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.upload__row {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+}
+
+.upload__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.upload__file {
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.upload__dims {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.upload__count {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.upload__count select {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+/* Marks a row where the admin overrode the guess, so a slip is visible before
+   committing rather than after the numbering has moved. */
+.upload__changed {
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0.1rem 0.35rem;
+}
+
+.upload__commit {
+  margin-bottom: 1.5rem;
+}
+
+.upload__done {
+  margin-bottom: 1.5rem;
+}
+
+/* ---------- remove page ---------- */
+
+/* Deliberately not styled like Save: it sits in the same row, and the two must
+   not be mistaken for each other. */
+.editor__remove {
+  margin-left: auto;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.editor__remove:hover:not(:disabled) {
+  color: var(--foreground);
+  border-color: var(--muted);
+}
+
+.editor__remove:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.editor__danger {
+  margin-top: 0.75rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--muted);
+  border-radius: 4px;
+  background: var(--paper);
+}
+
+.editor__danger p {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.editor__danger .editor__note {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.editor__remove--confirm {
+  margin-left: 0;
+  color: var(--foreground);
+  border-color: var(--muted);
+  font-weight: 600;
 }

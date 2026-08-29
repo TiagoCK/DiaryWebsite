@@ -51,6 +51,15 @@ export async function middleware(request) {
   const isPublic = PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 
   if (!user && !isPublic) {
+    // /api is fetched by <img> and fetch(), never navigated to. Redirecting
+    // those to the HTML login page hands an <img> a document to decode, so it
+    // fails as a broken image with no clue why -- and it silently overrode the
+    // 401 the scan route deliberately returns for exactly this case. Answer
+    // them the way the routes themselves do.
+    if (pathname.startsWith("/api/")) {
+      return new NextResponse("Unauthorized", { status: 401 });
+    }
+
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.search = pathname === "/" ? "" : `?next=${encodeURIComponent(pathname)}`;

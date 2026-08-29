@@ -38,12 +38,25 @@ export const DIARY_ID = 1;
  */
 export const MANIFEST = await loadManifest();
 
+/**
+ * Read, not import.
+ *
+ * An import would put this file in the module graph, and the uploader rewrites
+ * it on every commit -- which made the dev server tear down and re-evaluate
+ * this module, and everything importing it, in the middle of the request doing
+ * the writing. Reading it keeps the data identical and the graph static.
+ *
+ * This module is server-only (src/lib/views.js exists so client components
+ * never reach it), so node:fs here costs nothing on the browser side.
+ */
 async function loadManifest() {
   try {
-    const { default: entries } = await import("./manifest.generated.json", {
-      with: { type: "json" },
-    });
-    return entries;
+    const [{ readFile }, path] = await Promise.all([
+      import("node:fs/promises"),
+      import("node:path"),
+    ]);
+    const file = path.join(process.cwd(), "src", "lib", "manifest.generated.json");
+    return JSON.parse(await readFile(file, "utf8"));
   } catch {
     return [];
   }
@@ -52,6 +65,38 @@ async function loadManifest() {
 /** Storage object key for a page. Zero-padded so keys sort in reading order. */
 export function storageKeyFor(pageId, diaryId = DIARY_ID) {
   return `diary${diaryId}/${String(pageId).padStart(4, "0")}.jpg`;
+}
+
+/**
+ * A stable, opaque id for the scan itself, as opposed to where it currently sits.
+ *
+ * Page numbers are not identity: reordering rewrites every page_id while leaving
+ * the same SET of numbers in place, so a UI keyed on page numbers sees no change
+ * at all and quietly keeps showing the previous occupant of each slot. The
+ * storage key is the thing that never moves, but it must not reach the browser,
+ * so this hashes it.
+ *
+ * FNV-1a, inline rather than node:crypto -- a hash used only to tell two rows
+ * apart has no reason to pull in a Node builtin.
+ *
+ * Two passes with different seeds, concatenated, rather than one. A single
+ * 32-bit hash collides with probability around 0.6% across the ~6,800 pages the
+ * free tier holds, and a collision here is not cosmetic: two rows would share a
+ * React key, so /admin/pages would reuse one row's uncontrolled text box for
+ * both and Save would write a first line onto the wrong scan -- exactly the
+ * corruption this id was introduced to prevent. Sixty-four bits puts that back
+ * in the realm of never.
+ */
+export function contentIdFor(storageKey) {
+  const fnv = (seed) => {
+    let hash = seed;
+    for (let i = 0; i < storageKey.length; i += 1) {
+      hash ^= storageKey.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(36);
+  };
+  return `${fnv(0x811c9dc5)}${fnv(0x01000193)}`;
 }
 
 /** The local file backing a page number, or undefined. Used by the scan route. */
@@ -69,10 +114,16 @@ export function findLocalPage(pageId) {
  * someone actually looks at, and keeps storage keys out of the browser.
  */
 export function getPageImageUrl(page) {
-  // ?v= changes whenever the image is edited. Without it an edited scan can be
-  // served from a cache that still holds the previous bytes under the same URL.
+  // ?v= identifies WHICH scan and WHICH version of it, so the URL changes both
+  // when a scan is edited and when a different scan moves into this page number.
+  //
+  // The edit timestamp alone is not enough. Reordering does not touch it, and
+  // most scans have never been edited, so swapping two of those produced two
+  // byte-identical URLs -- React wrote no new src, the browser never re-fetched,
+  // and both pages kept showing the scan that used to be there.
   const version = page.updatedAt ? Date.parse(page.updatedAt) : 0;
-  return version ? `/api/scan/${page.pageId}?v=${version}` : `/api/scan/${page.pageId}`;
+  const token = version ? `${page.contentId}-${version}` : page.contentId;
+  return `/api/scan/${page.pageId}?v=${token}`;
 }
 
 /** Ordered page records. Metadata only -- no image bytes. */
@@ -84,6 +135,7 @@ export async function getPages() {
 function readLocalPages() {
   return MANIFEST.map((page) => ({
     pageId: page.pageId,
+    contentId: contentIdFor(page.storageKey ?? page.file),
     pageCount: page.pageCount,
     width: page.width,
     height: page.height,
@@ -113,6 +165,9 @@ async function readSupabasePages() {
 
   return (data ?? []).map((row) => ({
     pageId: row.page_id,
+    // Derived, never the key itself: the browser learns that two rows differ,
+    // and nothing about the storage layout.
+    contentId: contentIdFor(row.storage_key),
     pageCount: row.page_count,
     width: row.width,
     height: row.height,

@@ -34,7 +34,7 @@ function EditButtons({ view }) {
           ? `Edit spread (pages ${page.pageId}–${page.pageId + 1})`
           : `Edit page ${page.pageId}`;
         return (
-          <Link key={page.pageId} className="edittools__btn" href={`/admin/editor/${page.pageId}`}>
+          <Link key={page.contentId} className="edittools__btn" href={`/admin/editor/${page.pageId}`}>
             {label}
             {page.isRedacted && <span className="edittools__flag edittools__flag--redacted">redacted</span>}
             {page.hasOriginal && !page.isRedacted && (

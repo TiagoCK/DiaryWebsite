@@ -1,47 +1,118 @@
+import Link from "next/link";
+
 import { requireAdmin } from "@/lib/auth";
 import { getPages } from "@/lib/pages";
+import { coverage, searchPages } from "@/lib/search";
 import ActionForm from "@/components/ActionForm";
+import HighlightedLine from "@/components/HighlightedLine";
 import { updateFirstLine } from "../actions";
 
 export const dynamic = "force-dynamic";
 
-export default async function PageIndex() {
+export default async function PageIndex({ searchParams }) {
   await requireAdmin();
+
+  const params = await searchParams;
+  const raw = params.q;
+  const query = (Array.isArray(raw) ? raw[0] : raw ?? "").toString();
+  const blankOnly = params.blank === "1";
+
   const pages = await getPages();
+  const { filled, total, blank } = coverage(pages);
+
+  // Blank-only wins over the query: a scan with no first line cannot match a
+  // search, so combining them could only ever return nothing.
+  const shown = blankOnly
+    ? pages.filter((page) => !page.firstLine)
+    : query.trim() !== ""
+      ? searchPages(pages, query)
+      : pages;
 
   return (
     <>
       <h2>Page index</h2>
       <p className="admin__note">
-        The first line of each scan, used for searching later. A spread covers two
+        The first line of each scan, used for searching. A spread covers two
         pages &mdash; use the left-hand page and stay consistent.
       </p>
 
-      <ul className="admin__list">
-        {pages.map((page) => {
-          const span =
-            page.pageCount === 1
-              ? `Page ${page.pageId}`
-              : `Pages ${page.pageId}\u2013${page.pageId + page.pageCount - 1}`;
-          return (
-            <li key={page.pageId} className="admin__row">
-              <ActionForm action={updateFirstLine}>
-                <input type="hidden" name="pageId" value={page.pageId} />
-                <span className="admin__span">{span}</span>
-                <input
-                  type="text"
-                  name="firstLine"
-                  defaultValue={page.firstLine ?? ""}
-                  placeholder="First line&hellip;"
-                  maxLength={500}
-                  aria-label={`First line for ${span}`}
-                />
-                <button type="submit">Save</button>
-              </ActionForm>
-            </li>
-          );
-        })}
-      </ul>
+      <form className="pagesearch" method="get" action="/admin/pages">
+        <label className="pagesearch__label" htmlFor="q">
+          Search first lines
+        </label>
+        <input
+          id="q"
+          name="q"
+          type="search"
+          defaultValue={query}
+          placeholder="a word from the first line&hellip;"
+          autoComplete="off"
+        />
+        <button type="submit">Search</button>
+        {/* Plain links, not a second form: this whole page is a GET, so the
+            filters are just URLs and both survive JavaScript being off. */}
+        <Link
+          className={`pagesearch__toggle${blankOnly ? " pagesearch__toggle--on" : ""}`}
+          href={blankOnly ? "/admin/pages" : "/admin/pages?blank=1"}
+        >
+          {blankOnly ? "Show all" : `Show blank only (${blank})`}
+        </Link>
+      </form>
+
+      <p className="admin__note">
+        <strong>
+          {filled} of {total}
+        </strong>{" "}
+        scans have a first line. Only those can be found by search, here or
+        from the <Link href="/search">reader</Link>.
+        {blankOnly && " Saving a line removes that scan from this list."}
+      </p>
+
+      {shown.length === 0 ? (
+        <p className="admin__note">
+          {blankOnly ? "Every scan has a first line." : `Nothing matches ${query}.`}
+        </p>
+      ) : (
+        <ul className="admin__list">
+          {shown.map((page) => {
+            const span =
+              page.pageCount === 1
+                ? `Page ${page.pageId}`
+                : `Pages ${page.pageId}–${page.pageId + page.pageCount - 1}`;
+            return (
+              // Keyed on the scan, not the page number. The text box is
+              // uncontrolled, and defaultValue only applies when it mounts -- so
+              // if a row were reused across a reorder it would keep the previous
+              // occupant's text and Save would write it onto the wrong scan.
+              // Keying this way makes React move the whole row, box included.
+              <li key={page.contentId} className="admin__row">
+                <ActionForm action={updateFirstLine}>
+                  <input type="hidden" name="pageId" value={page.pageId} />
+                  <span className="admin__span">{span}</span>
+                  <input
+                    type="text"
+                    name="firstLine"
+                    defaultValue={page.firstLine ?? ""}
+                    placeholder="First line&hellip;"
+                    maxLength={500}
+                    aria-label={`First line for ${span}`}
+                  />
+                  <button type="submit">Save</button>
+                </ActionForm>
+                {/* Shown beside the editable box, not inside it: marking up the
+                    match has to happen outside an input's value. */}
+                {query.trim() !== "" && !blankOnly && page.firstLine && (
+                  <HighlightedLine
+                    text={page.firstLine}
+                    query={query}
+                    className="admin__match"
+                  />
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </>
   );
 }

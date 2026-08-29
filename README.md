@@ -1,11 +1,60 @@
 # My Diary
 
-A personal diary web app for reading handwritten scans as a book. Next.js (App
-Router), plain JavaScript, Supabase for page data and image storage.
+Reads a shelf of handwritten diary scans as a book — a real page-turn, two pages
+to a spread — and gives its owner the tools to run the archive: upload scans or
+whole PDFs, rotate and crop them, black out what should stay private, reorder
+pages, and search what has been transcribed.
+
+Next.js (App Router), plain JavaScript, Supabase for page rows, private image
+storage and auth. No test framework, no ORM, no UI library.
+
+**The content is private, so the app is not deployed publicly.** This repository
+is the code only: scans, the manifest and every credential are gitignored, and
+nothing in the history has ever contained diary content.
+
+## The problem it actually solves
+
+A scan is not a page. A photograph of an open notebook is *two* pages, and the
+next photograph might be one. That single fact drives most of the design:
+
+- **Page numbers are derived, not stored identity.** A scan occupies
+  `page_count` consecutive numbers, so the diary is an ordered list of scans and
+  the numbering falls out of it. Reordering is therefore a renumbering of
+  everything, done in one SQL function so it cannot half-apply; deleting a page
+  closes its gap the same way. A UI keyed on page numbers silently showed the
+  wrong images, which is why every list is keyed on a content-derived id
+  instead.
+- **Redaction is data, not a burn.** Censor bars are stored as percentages of
+  the *original* image and re-applied by the publish pipeline —
+  `crop(rotate(bars(original)))`. Burning them into the published bytes would
+  mean the next crop silently republished the uncensored scan. The pristine
+  original is kept so an admin can still see what a bar covers, behind the one
+  endpoint that requires an admin.
+- **The database is closed by default.** RLS is on with **no policies**, which
+  denies every anon and authenticated request; the app reads through the server
+  with the service-role key. Supabase hands the anon key to browsers by design,
+  so anything less would publish the diary index.
+
+## Architecture
+
+```
+browser ──► Next.js server ──► Supabase Postgres   page rows, RLS-closed
+                │
+                └────────────► Supabase Storage    private bucket, signed URLs
+
+/api/scan/<pageId>          the only image path a reader can reach
+/api/admin/original/<id>    pristine, pre-redaction, admin-only
+```
+
+`src/lib/pages.js` is the seam: everything above it asks for pages, everything
+below it decides whether they come from Postgres or from disk. Pure rules live
+beside it — `views.js` (grouping scans into spreads), `ordering.js`
+(renumbering), `search.js` (matching), `redaction.js` (box geometry) — with no
+database or React imports, which is what makes them directly testable.
 
 ## Running it
 
-Requires Node 20.9+ (developed on 26.4.0).
+Requires Node 22+ (developed on 26.4.0).
 
 ```bash
 npm install
@@ -16,10 +65,25 @@ Then open http://localhost:3000. Arrow keys or the buttons turn pages.
 
 Other commands:
 
+- `npm test` — the suite (no database or scans needed; fixtures are generated)
+- `npm run lint`
 - `npm run build` — production build
 - `npm start` — serve the production build (run `build` first)
 - `npm run add` — preview adding new scans
 - `npm run add -- --commit` — add them
+
+## Tests
+
+`node --test`, no framework. 110 assertions across six suites covering the
+rules that are easy to get quietly wrong: dense renumbering, view grouping,
+accent-insensitive matching, EXIF orientation, PDF page order, redaction
+geometry and upload path safety.
+
+Every fixture is **generated at run time** — images via sharp, including one
+carrying EXIF orientation 6, and a hand-built three-page PDF whose ink rises per
+page so ordering can be checked without reading text back. Nothing reads
+`images/`, so the suite passes on a machine that has never seen the diary. CI
+runs it on Node 22 and 24 with no credentials at all.
 
 ## Signing in
 
@@ -116,7 +180,54 @@ Don't add a policy without deciding who it's for.
 The `diary-scans` bucket is private for the same reason: objects are reachable
 only through short-lived signed URLs minted server-side.
 
-## Adding pages
+## Adding pages from the app
+
+**Admin → Upload**, or the Upload link in the banner. Takes one image, or a PDF
+whose pages each become a diary page in order. Two steps, the same shape as the
+script below: **Analyse** shows what the pages would be, **Add** writes them.
+
+The middle step is not ceremony. `page_count` fixes the numbering of every page
+added after it, and nothing in the app can change it once written — so the
+single/spread guess is a dropdown you can correct first, and the page numbers
+update as you do.
+
+Both steps run `analyse()` from `src/lib/ingest.js`, which is the same function
+the script uses. There is deliberately no second pipeline.
+
+### What it stores
+
+Pages are JPEG at up to 1600px wide, because these are photographs of paper —
+the content PNG compresses worst. The 14 scans here average 150 KB, so the 1 GB
+free tier holds roughly 6,800 pages; as PNG the same images would be ~13× larger
+in both storage and egress. Nothing compounds the loss: `originals/` keeps the
+pristine upload, so a later crop or rotation re-encodes once from that.
+
+The file you pick is also written into `images/` as the full-resolution master,
+and the manifest is regenerated, so `DIARY_SOURCE=local` keeps working. A PDF
+contributes one PNG master per page. If `images/` is not writable — a deployment
+rather than your own machine — that step is skipped and the result says so.
+
+### PDFs
+
+Rasterised locally with `pdfjs-dist` and `@napi-rs/canvas`. Nothing is sent to
+Adobe or any other service: the diary only ever reaches your own Supabase.
+(Adobe's PDF Services free tier is real — 500 document transactions a month —
+but it would mean uploading private pages to a third party, needing credentials,
+and depending on their uptime.)
+
+Each page is rendered so its long edge lands near 1600px, computed per page
+rather than at a fixed DPI, to PNG first — lossless, so `analyse()` still does
+exactly one lossy encode. Limits: 100 MB per upload, 200 pages per PDF.
+
+Two things worth knowing if you touch this code:
+
+- The file is sent as the **raw request body**, not multipart. `request.formData()`
+  refuses bodies over about 10 MB, which most scanned PDFs are.
+- pdfjs wants `standardFontDataUrl` as a path with forward slashes and a
+  trailing one. A `file://` URL breaks on any project folder with a space in its
+  name — this one has two.
+
+## Adding pages from the terminal
 
 Drop scans into `images/incoming/`, then:
 
@@ -157,12 +268,42 @@ Never edit it by hand.
 
 ## Filling in `first_line`
 
-`first_line` is for searching later. Nothing populates it automatically — type
-it in the Supabase dashboard → Table Editor → `pages`, sorted by `page_id`.
+`first_line` is what search reads. Type it in from **Admin → Page index**, which
+reports how many scans have one and can filter to the blank ones
+(`/admin/pages?blank=1`) so the gaps can be worked through.
 
 A spread row covers two pages, so use the first line of the **left** page and
 stay consistent. Nothing depends on the column being filled, so it can be done
-gradually.
+gradually — but a scan with no first line cannot be found by search.
+
+## Search
+
+Three surfaces, one rule. `src/lib/search.js` holds the matching, so they cannot
+drift apart:
+
+- **In the viewer** — filters the pages already in memory as you type; clicking
+  a result turns to that page. No request.
+- **`/search?q=`** — a plain GET form, so the URL is shareable and it works with
+  JavaScript off. Results link to `/?page=N`, which opens the reader at that
+  page.
+- **Admin → Page index** — `?q=` over the same rule, plus coverage and the blank
+  filter.
+
+Terms are ANDed and matched as substrings, case- and accent-insensitively, so
+`electrical student` finds *"electrical engi student"*. A blank query matches
+nothing rather than everything.
+
+`fold()` maps each character to exactly one folded character rather than running
+`normalize("NFD")` over the whole string, because `highlight()` finds matches in
+the folded text and slices the **original** at those offsets. NFD turns `é` into
+two code points and would shift every offset after it, marking the wrong
+letters.
+
+Matching runs in the app, not in Postgres. `getPages()` already loads every
+row's metadata on every render, so filtering 14 rows is free, and one rule beats
+two that disagree — `ilike` folds case by its own collation and would not match
+the filter running in the browser. **Past a few thousand scans**, move this to
+`ilike` with a `pg_trgm` index and have the viewer's live filter call it.
 
 ## The scans
 
@@ -193,6 +334,14 @@ returns either half of a spread (clipped) or a whole single page.
 
 The current 14 scans yield 13 views covering pages 1–26.
 
+The controls under the book carry a **Go to page** field. It takes any page
+number and shows the view holding it, so an interior number resolves to its
+frame — page 4 opens the spread at pages 3–4. That is deliberately unlike the
+**Order** tab, which refuses an interior number: reordering has to know which
+*scan* you mean, while reading only has to know which *frame*. Jumping to the
+neighbouring view flips; anything further lands directly, since the leaf
+animation turns exactly one view.
+
 ## Layout
 
 ```
@@ -219,6 +368,24 @@ Imports can use the `@/` alias for anything under `src/`.
 `/api/scan/<pageId>` is the indirection layer. In `local` mode it streams the
 file from disk; in `supabase` mode it looks up the row, mints a signed Storage
 URL, and redirects to it.
+
+### A page number is not an identity
+
+Reordering rewrites every `page_id` but leaves the same *set* of numbers in
+place — 1, 2, 3, 5, 7 … before and after. So anything keyed on the page number
+sees no change at all and keeps showing the previous occupant of each slot.
+
+Two things went wrong that way. Image URLs were versioned on `updated_at`, which
+only the editor writes, so swapping two never-edited scans produced two
+identical URLs and the browser never re-fetched. And React reused each list row
+in place, which left `/admin/pages`' uncontrolled first-line box holding the
+previous scan's text — pressing Save then wrote it onto the wrong scan.
+
+The fix is `contentIdFor(storage_key)` in `src/lib/pages.js`: a short opaque
+hash of the one value that never moves. It keys every page list, so React moves
+a row (and its form state) along with its scan, and it goes into `?v=` so an
+image URL changes whenever *what sits at that page number* changes. The storage
+key itself still never reaches the browser.
 
 This is why `getPageImageUrl()` can stay synchronous. Signed URLs are async and
 expire, so returning one directly would make view assembly async and push
