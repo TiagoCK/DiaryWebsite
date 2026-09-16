@@ -2,18 +2,23 @@ import Link from "next/link";
 
 import HighlightedLine from "@/components/HighlightedLine";
 import { requireUser } from "@/lib/auth";
+import { getDiaries } from "@/lib/diaries";
 import { getPages } from "@/lib/pages";
 import { coverage, searchPages } from "@/lib/search";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Search the diary by first line, at a URL you can bookmark and send.
+ * Search every diary by first line, at a URL you can bookmark and send.
  *
  * A plain GET form rather than a client-side filter: this is the version that
  * survives being pasted into a message, and it works with JavaScript off. The
- * viewer has its own live filter for searching while you read; both call
- * searchPages(), so they always agree about what matches.
+ * viewer has its own live filter for searching the book you are reading; both
+ * call searchPages(), so they always agree about what matches.
+ *
+ * Deliberately across all volumes. Searching one book at a time would mean
+ * remembering which one an entry was in, which is the thing you use search to
+ * avoid.
  */
 export default async function SearchPage({ searchParams }) {
   // Checked here, not just in the middleware -- see src/middleware.js.
@@ -23,9 +28,19 @@ export default async function SearchPage({ searchParams }) {
   const raw = params.q;
   const query = (Array.isArray(raw) ? raw[0] : raw ?? "").toString();
 
-  const pages = await getPages();
-  const matches = searchPages(pages, query);
-  const { filled, total } = coverage(pages);
+  const diaries = await getDiaries(user);
+  const perDiary = await Promise.all(
+    diaries.map(async (diary) => {
+      const pages = await getPages(diary.id);
+      return { diary, pages, matches: searchPages(pages, query) };
+    })
+  );
+
+  const matched = perDiary.filter((entry) => entry.matches.length > 0);
+  const total = matched.reduce((n, entry) => n + entry.matches.length, 0);
+
+  const filled = perDiary.reduce((n, e) => n + coverage(e.pages).filled, 0);
+  const allPages = perDiary.reduce((n, e) => n + e.pages.length, 0);
   const searched = query.trim() !== "";
 
   return (
@@ -48,13 +63,11 @@ export default async function SearchPage({ searchParams }) {
       </form>
 
       <p className="admin__note">
-        {filled} of {total} scans have a first line. Only those can be found
-        {/* The page index is admin-only, so readers are not sent to a door
-            that will bounce them straight back here. */}
+        {filled} of {allPages} scans have a first line. Only those can be found
         {user.isAdmin ? (
           <>
-            ; the rest are typed in from the{" "}
-            <Link href="/admin/pages">page index</Link>.
+            ; the rest are typed in from each diary&rsquo;s{" "}
+            <Link href="/admin">page index</Link>.
           </>
         ) : (
           "."
@@ -63,43 +76,61 @@ export default async function SearchPage({ searchParams }) {
 
       {!searched ? (
         <p className="searchpage__empty">Type something to search for.</p>
-      ) : matches.length === 0 ? (
+      ) : total === 0 ? (
         <p className="searchpage__empty">
           Nothing matches <strong>{query}</strong>.
         </p>
       ) : (
         <>
           <p className="searchpage__count">
-            {matches.length} {matches.length === 1 ? "match" : "matches"}
+            {total} {total === 1 ? "match" : "matches"}
+            {matched.length > 1 && ` across ${matched.length} diaries`}
           </p>
-          <ul className="searchpage__list">
-            {matches.map((page) => {
-              const span =
-                page.pageCount === 1
-                  ? `Page ${page.pageId}`
-                  : `Pages ${page.pageId}–${page.pageId + page.pageCount - 1}`;
-              return (
-                <li key={page.contentId} className="searchpage__row">
-                  {/* Opens the reader already turned to this page. */}
-                  <Link className="searchpage__hit" href={`/?page=${page.pageId}`}>
-                    <img
-                      className="order__thumb"
-                      src={page.src}
-                      alt=""
-                      width={page.width}
-                      height={page.height}
-                      loading="lazy"
-                      decoding="async"
-                    />
-                    <span className="searchpage__meta">
-                      <span className="order__span">{span}</span>
-                      <HighlightedLine text={page.firstLine} query={query} />
-                    </span>
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
+
+          {matched.map(({ diary, matches }) => (
+            <section key={diary.id} className="searchpage__group">
+              {/* Grouped by volume, and only labelled when there is more than
+                  one -- a heading over the single group you already know you
+                  are in is noise. */}
+              {diaries.length > 1 && (
+                <h3 className="searchpage__diary">
+                  <Link href={`/d/${diary.slug}`}>{diary.title}</Link>
+                </h3>
+              )}
+
+              <ul className="searchpage__list">
+                {matches.map((page) => {
+                  const span =
+                    page.pageCount === 1
+                      ? `Page ${page.pageId}`
+                      : `Pages ${page.pageId}–${page.pageId + page.pageCount - 1}`;
+                  return (
+                    <li key={page.contentId} className="searchpage__row">
+                      {/* Opens that diary, already turned to this page. */}
+                      <Link
+                        className="searchpage__hit"
+                        href={`/d/${diary.slug}?page=${page.pageId}`}
+                      >
+                        <img
+                          className="order__thumb"
+                          src={page.src}
+                          alt=""
+                          width={page.width}
+                          height={page.height}
+                          loading="lazy"
+                          decoding="async"
+                        />
+                        <span className="searchpage__meta">
+                          <span className="order__span">{span}</span>
+                          <HighlightedLine text={page.firstLine} query={query} />
+                        </span>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))}
         </>
       )}
     </section>

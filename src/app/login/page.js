@@ -18,6 +18,7 @@ function LoginForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   async function onSubmit(event) {
     event.preventDefault();
@@ -59,14 +60,34 @@ function LoginForm() {
       />
 
       <label htmlFor="password">Password</label>
-      <input
-        id="password"
-        type="password"
-        autoComplete="current-password"
-        required
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-      />
+      <div className="login__password">
+        <input
+          id="password"
+          type={showPassword ? "text" : "password"}
+          autoComplete="current-password"
+          required
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+        {/*
+          type="button" is load-bearing: a bare <button> inside a form defaults
+          to submit, so revealing the password would attempt a sign-in.
+
+          aria-pressed rather than a label that only changes visually, so a
+          screen reader is told the state rather than having to infer it from
+          the word on the button.
+        */}
+        <button
+          type="button"
+          className="login__reveal"
+          onClick={() => setShowPassword((on) => !on)}
+          aria-pressed={showPassword}
+          aria-controls="password"
+          title={showPassword ? "Hide password" : "Show password"}
+        >
+          {showPassword ? "Hide" : "Show"}
+        </button>
+      </div>
 
       {error && (
         <p className="login__error" role="alert">

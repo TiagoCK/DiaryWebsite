@@ -5,7 +5,7 @@ import path from "node:path";
 import { revalidatePath } from "next/cache";
 
 import { requireAdmin } from "@/lib/auth";
-import { DIARY_ID, DIARY_SOURCE } from "@/lib/pages";
+import { DIARY_SOURCE } from "@/lib/pages";
 import {
   classifyTarget,
   describeSpan,
@@ -16,11 +16,11 @@ import { getSupabase } from "@/lib/supabase";
 
 const MANIFEST_FILE = path.join(process.cwd(), "src", "lib", "manifest.generated.json");
 
-async function loadPages() {
+async function loadPages(diaryId) {
   const { data, error } = await getSupabase()
     .from("pages")
     .select("page_id, page_count, storage_key")
-    .eq("diary_id", DIARY_ID)
+    .eq("diary_id", diaryId)
     .order("page_id", { ascending: true });
   if (error) throw new Error(error.message);
   return (data ?? []).map((row) => ({
@@ -39,6 +39,11 @@ async function loadPages() {
 export async function movePage(_prevState, formData) {
   await requireAdmin();
 
+  const diaryId = Number(formData.get("diaryId"));
+  if (!Number.isInteger(diaryId) || diaryId < 1) {
+    return { ok: false, message: "Invalid diary." };
+  }
+
   const pageId = Number(formData.get("pageId"));
   const rawTarget = (formData.get("target") ?? "").toString().trim();
 
@@ -50,7 +55,7 @@ export async function movePage(_prevState, formData) {
   }
   const target = Number(rawTarget);
 
-  const pages = await loadPages();
+  const pages = await loadPages(diaryId);
   const moving = pages.find((page) => page.pageId === pageId);
   if (!moving) return { ok: false, message: "No such page." };
 
@@ -86,7 +91,7 @@ export async function movePage(_prevState, formData) {
   const spans = projectSpans(pages, keys);
 
   const { error } = await getSupabase().rpc("reorder_diary_pages", {
-    p_diary_id: DIARY_ID,
+    p_diary_id: diaryId,
     p_keys: keys,
   });
   if (error) return { ok: false, message: error.message };

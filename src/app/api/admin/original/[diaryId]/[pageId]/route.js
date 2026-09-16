@@ -1,5 +1,4 @@
 import { getCurrentUser } from "@/lib/auth";
-import { DIARY_ID } from "@/lib/pages";
 import { BUCKET, getSupabase } from "@/lib/supabase";
 
 /**
@@ -18,14 +17,16 @@ export async function GET(request, { params }) {
   if (!user) return new Response("Unauthorized", { status: 401 });
   if (!user.isAdmin) return new Response("Forbidden", { status: 403 });
 
-  const { pageId: raw } = await params;
-  if (!/^\d+$/.test(raw)) return new Response("Not found", { status: 404 });
+  const { diaryId: rawDiary, pageId: raw } = await params;
+  if (!/^\d+$/.test(raw) || !/^\d+$/.test(rawDiary)) {
+    return new Response("Not found", { status: 404 });
+  }
 
   const supabase = getSupabase();
   const { data: row, error } = await supabase
     .from("pages")
     .select("storage_key, original_key")
-    .eq("diary_id", DIARY_ID)
+    .eq("diary_id", Number(rawDiary))
     .eq("page_id", Number(raw))
     .maybeSingle();
 

@@ -10,7 +10,7 @@ import {
   revertImage,
   saveImageEdit,
   setRedactionBoxes,
-} from "@/app/admin/editor/actions";
+} from "@/app/admin/d/[slug]/editor/actions";
 import { toOriginalSpace, toRotatedSpace } from "@/lib/redaction";
 
 /** Below this (percent of the image) a drag is treated as a stray click. */
@@ -102,11 +102,11 @@ export default function ImageEditor({ page }) {
     img.onerror = () => {
       if (!cancelled) setStatus({ ok: false, message: "Could not load the image." });
     };
-    img.src = `/api/admin/original/${page.pageId}`;
+    img.src = `/api/admin/original/${page.diaryId}/${page.pageId}`;
     return () => {
       cancelled = true;
     };
-  }, [page.pageId, page.rotation]);
+  }, [page.diaryId, page.pageId, page.rotation]);
 
   const removeBar = useCallback((index) => {
     setBoxes((list) => list.filter((_, j) => j !== index));
@@ -175,6 +175,7 @@ export default function ImageEditor({ page }) {
   const onSave = () =>
     run(() =>
       saveImageEdit({
+        diaryId: page.diaryId,
         pageId: page.pageId,
         rotation,
         crop:
@@ -186,7 +187,7 @@ export default function ImageEditor({ page }) {
 
   const onRevert = () =>
     run(
-      () => revertImage({ pageId: page.pageId }),
+      () => revertImage({ diaryId: page.diaryId, pageId: page.pageId }),
       () => {
         setRotation(0);
         setCrop(undefined);
@@ -198,8 +199,8 @@ export default function ImageEditor({ page }) {
   // been renumbered, so this URL now addresses a different scan.
   const onDelete = () =>
     run(
-      () => deletePage({ pageId: page.pageId, confirm: true }),
-      () => router.push("/admin/editor")
+      () => deletePage({ diaryId: page.diaryId, pageId: page.pageId, confirm: true }),
+      () => router.push(`/admin/d/${page.diarySlug}/editor`)
     );
 
   const onSaveBars = () =>
@@ -207,6 +208,7 @@ export default function ImageEditor({ page }) {
       () =>
         // Only geometry crosses this boundary. There is no opacity field.
         setRedactionBoxes({
+          diaryId: page.diaryId,
           pageId: page.pageId,
           boxes: boxes.map((b) => ({ x: b.x, y: b.y, width: b.width, height: b.height })),
         }),
@@ -234,7 +236,7 @@ export default function ImageEditor({ page }) {
     <div className="editor">
       <div className="editor__head">
         <h2>Editing {label}</h2>
-        <button type="button" className="editor__back" onClick={() => router.push("/admin/editor")}>
+        <button type="button" className="editor__back" onClick={() => router.push(`/admin/d/${page.diarySlug}/editor`)}>
           &larr; Back to browser
         </button>
       </div>

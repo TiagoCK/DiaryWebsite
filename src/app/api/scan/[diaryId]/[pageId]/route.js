@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { DIARY_ID, DIARY_SOURCE, findLocalPage } from "@/lib/pages";
+import { canSee } from "@/lib/diary-rules";
+import { DIARY_SOURCE, findLocalPage } from "@/lib/pages";
 import { getCurrentUser } from "@/lib/auth";
 
 const SCANS_DIR = path.join(process.cwd(), "images");
@@ -29,14 +30,18 @@ export async function GET(request, { params }) {
   const user = await getCurrentUser();
   if (!user) return new Response("Unauthorized", { status: 401 });
 
-  const { pageId: raw } = await params;
+  const { diaryId: rawDiary, pageId: raw } = await params;
 
   // Reject anything that is not a plain positive integer before it can reach a
-  // filesystem path or a query.
-  if (!/^\d+$/.test(raw)) return notFound();
+  // filesystem path or a query. Both segments, not just the page: the diary is
+  // now half of what identifies an image.
+  if (!/^\d+$/.test(raw) || !/^\d+$/.test(rawDiary)) return notFound();
   const pageId = Number(raw);
+  const diaryId = Number(rawDiary);
 
-  return DIARY_SOURCE === "local" ? serveFromDisk(pageId) : serveFromSupabase(pageId);
+  return DIARY_SOURCE === "local"
+    ? serveFromDisk(pageId)
+    : serveFromSupabase(diaryId, pageId, user);
 }
 
 async function serveFromDisk(pageId) {
@@ -59,22 +64,34 @@ async function serveFromDisk(pageId) {
   }
 }
 
-async function serveFromSupabase(pageId) {
+async function serveFromSupabase(diaryId, pageId, viewer) {
   const { getSupabase, BUCKET, SIGNED_URL_TTL_SECONDS } = await import("@/lib/supabase");
   const supabase = getSupabase();
 
+  /*
+   * The diary's visibility comes back with the page, in one query.
+   *
+   * This is the boundary that actually matters. The shelf and search filter
+   * hidden diaries out of what a reader is *shown*, but neither stops a reader
+   * requesting /api/scan/<id>/1 directly and reading the images anyway. Page
+   * numbers start at 1 in every volume, so guessing costs nothing.
+   */
   const { data: row, error } = await supabase
     .from("pages")
-    .select("storage_key")
-    .eq("diary_id", DIARY_ID)
+    .select("storage_key, diaries!inner(visibility)")
+    .eq("diary_id", diaryId)
     .eq("page_id", pageId)
     .maybeSingle();
 
   if (error) {
-    console.error(`scan route: page ${pageId} lookup failed:`, error.message);
+    console.error(`scan route: diary ${diaryId} page ${pageId} lookup failed:`, error.message);
     return new Response("Upstream error", { status: 502 });
   }
   if (!row) return notFound();
+
+  // 404 rather than 403, matching /d/<slug>: a refusal that distinguishes
+  // "no such diary" from "not yours" tells a reader which ids are worth trying.
+  if (!canSee(row.diaries, viewer)) return notFound();
 
   const { data: signed, error: signError } = await supabase.storage
     .from(BUCKET)

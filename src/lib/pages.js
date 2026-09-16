@@ -15,8 +15,15 @@
 /** Which backing store to read from. */
 export const DIARY_SOURCE = process.env.DIARY_SOURCE === "local" ? "local" : "supabase";
 
-/** Diary volume. Multiple diaries share one table, keyed by (diary_id, page_id). */
-export const DIARY_ID = 1;
+/**
+ * The diary to assume when nothing says otherwise.
+ *
+ * Not "the diary" any more -- every request-facing path takes a diary id
+ * explicitly, resolved from the slug in the URL. This remains for the two
+ * callers with no request to resolve from: the add-pages CLI, and local mode,
+ * which reads a manifest off disk and has only ever had one book.
+ */
+export const DEFAULT_DIARY_ID = 1;
 
 /**
  * The local scans, in order. Written by scripts/add-pages.mjs -- never by hand.
@@ -63,7 +70,7 @@ async function loadManifest() {
 }
 
 /** Storage object key for a page. Zero-padded so keys sort in reading order. */
-export function storageKeyFor(pageId, diaryId = DIARY_ID) {
+export function storageKeyFor(pageId, diaryId = DEFAULT_DIARY_ID) {
   return `diary${diaryId}/${String(pageId).padStart(4, "0")}.jpg`;
 }
 
@@ -123,18 +130,33 @@ export function getPageImageUrl(page) {
   // and both pages kept showing the scan that used to be there.
   const version = page.updatedAt ? Date.parse(page.updatedAt) : 0;
   const token = version ? `${page.contentId}-${version}` : page.contentId;
-  return `/api/scan/${page.pageId}?v=${token}`;
+
+  // Scoped by diary, not just page number. Page numbers restart at 1 in every
+  // book, so /api/scan/7 stopped identifying anything the moment a second
+  // volume existed -- it would have served whichever book answered first.
+  return `/api/scan/${page.diaryId}/${page.pageId}?v=${token}`;
 }
 
-/** Ordered page records. Metadata only -- no image bytes. */
-export async function getPages() {
-  const rows = DIARY_SOURCE === "local" ? readLocalPages() : await readSupabasePages();
+/**
+ * Ordered page records for one diary. Metadata only -- no image bytes.
+ *
+ * The diary id is required rather than defaulted: a page number means nothing
+ * on its own now that two books both have a page 7, and a silent default is
+ * exactly how one book would start serving another's pages.
+ */
+export async function getPages(diaryId) {
+  if (!Number.isInteger(diaryId)) {
+    throw new Error("getPages needs a diary id.");
+  }
+  const rows =
+    DIARY_SOURCE === "local" ? readLocalPages(diaryId) : await readSupabasePages(diaryId);
   return rows.map((page) => ({ ...page, src: getPageImageUrl(page) }));
 }
 
-function readLocalPages() {
+function readLocalPages(diaryId) {
   return MANIFEST.map((page) => ({
     pageId: page.pageId,
+    diaryId,
     contentId: contentIdFor(page.storageKey ?? page.file),
     pageCount: page.pageCount,
     width: page.width,
@@ -148,7 +170,7 @@ function readLocalPages() {
   }));
 }
 
-async function readSupabasePages() {
+async function readSupabasePages(diaryId) {
   const { getSupabase } = await import("./supabase.js");
   const { data, error } = await getSupabase()
     .from("pages")
@@ -158,13 +180,14 @@ async function readSupabasePages() {
     // total, because every page calls this. With "*" a not-yet-added column is
     // simply absent and the mapping below falls back to a default.
     .select("*")
-    .eq("diary_id", DIARY_ID)
+    .eq("diary_id", diaryId)
     .order("page_id", { ascending: true });
 
   if (error) throw new Error(`Could not read pages from Supabase: ${error.message}`);
 
   return (data ?? []).map((row) => ({
     pageId: row.page_id,
+    diaryId: row.diary_id,
     // Derived, never the key itself: the browser learns that two rows differ,
     // and nothing about the storage layout.
     contentId: contentIdFor(row.storage_key),

@@ -2,13 +2,62 @@
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import HighlightedLine from "@/components/HighlightedLine";
+import PageZoom from "@/components/PageZoom";
 import { searchPages } from "@/lib/search";
-import { halfOf, viewIndexForPage } from "@/lib/views";
+import { halfOf, initialViewIndex, viewIndexForPage } from "@/lib/views";
 
 const FLIP_MS = 600;
 
 /** Enough to be useful without turning the viewer into a list; the rest are counted. */
 const MAX_RESULTS = 8;
+
+/**
+ * The remembered page number, or null.
+ *
+ * Returns null on the server and wherever storage is unavailable -- a private
+ * window and a browser configured to block site data both throw on access
+ * rather than returning nothing.
+ */
+function readRemembered(key) {
+  if (!key || typeof window === "undefined") return null;
+  try {
+    return window.sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A slot in the open book that opens the zoom when clicked.
+ *
+ * A button rather than a div with a handler, so it is reachable by keyboard and
+ * announced as something that does a thing. A blank facing page is left inert.
+ */
+function ZoomableSlot({ side, half, onOpen, busy }) {
+  if (!half) {
+    return (
+      <div className={`slot slot--${side}`}>
+        <Half half={half} />
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={`slot slot--${side} slot--zoomable`}
+      onClick={() => onOpen(half.page)}
+      disabled={busy}
+      aria-label={
+        half.page.pageCount === 1
+          ? `Enlarge page ${half.page.pageId}`
+          : `Enlarge pages ${half.page.pageId}–${half.page.pageId + half.page.pageCount - 1}`
+      }
+    >
+      <Half half={half} />
+    </button>
+  );
+}
 
 /** One half of the open book: half a spread, a whole single page, or blank. */
 function Half({ half }) {
@@ -38,6 +87,8 @@ export default function BookViewer({
   animate = true,
   renderToolbar,
   initialIndex = 0,
+  linkedPage = null,
+  rememberKey = null,
 }) {
   // Only the starting point. /?page=N is resolved on the server; the component
   // is keyed on it there, so arriving at a second deep link remounts rather
@@ -49,6 +100,10 @@ export default function BookViewer({
   const [jumpValue, setJumpValue] = useState("");
   const [jumpError, setJumpError] = useState("");
   const [query, setQuery] = useState("");
+
+  // The scan being examined full-window, or null. Held here rather than in the
+  // slots so Escape, the controls and a page turn all speak to one thing.
+  const [zoomed, setZoomed] = useState(null);
 
   // The admin editor turns the flip off: 600ms per step is tiring when you are
   // stepping through looking for scans to fix. Reuses the reduced-motion branch
@@ -76,6 +131,89 @@ export default function BookViewer({
   }, []);
 
   useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  /*
+   * The stored position, captured during the FIRST render.
+   *
+   * Not read inside the restore effect, which is the obvious place and is
+   * wrong: the effect that records the position runs before it -- passive
+   * effects for the first render flush before a layout effect's state update
+   * re-renders -- so by then storage already says page 1, and the restore
+   * "succeeds" onto the page it was supposed to move away from. Strict Mode
+   * makes it visible by running the mount effect twice, but the race is real
+   * without it.
+   *
+   * Capturing here takes the read out of that ordering entirely. Undefined on
+   * the server and never used for rendered output, so hydration is unaffected.
+   */
+  const rememberedRef = useRef(undefined);
+  if (rememberedRef.current === undefined) {
+    rememberedRef.current = readRemembered(rememberKey);
+  }
+  const restoredRef = useRef(false);
+
+  /*
+   * Reopen where this reading session left off.
+   *
+   * A layout effect, not a plain one: it runs before the browser paints, so
+   * page 1 never flashes on the way to page 11. Mount only -- returning to "/"
+   * from anywhere unmounts this component, which is exactly when the position
+   * needs restoring.
+   *
+   * initialViewIndex() decides; a ?page= link that already resolved on the
+   * server wins, and this defers to it.
+   */
+  useLayoutEffect(() => {
+    if (!rememberKey) return;
+
+    const { index: target, source } = initialViewIndex(views, {
+      linkedPage,
+      rememberedPage: rememberedRef.current,
+    });
+
+    // sessionStorage is an external store the server cannot see, so this
+    // cannot be resolved during render without the server and the client
+    // disagreeing about what they rendered. Correcting once, before paint, is
+    // the trade: one extra render, no hydration mismatch, no visible flash.
+    if (source === "remembered") setIndex(target);
+    restoredRef.current = true;
+
+    // Mount only, deliberately: after this the position is written, never read
+    // back, so re-running on every `views` change would fight the reader.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /*
+   * Record the position, and keep the address bar honest about it.
+   *
+   * The page NUMBER is stored rather than the frame index, because an index
+   * means nothing once a page is added, removed or reordered -- and it is the
+   * vocabulary ?page= already speaks, so there is one idea here, not two.
+   *
+   * replaceState rather than a router navigation: a page turn must not add a
+   * history entry, and must not re-run the server component.
+   */
+  useEffect(() => {
+    // Nothing is written until the restore has had its say, so a tab closed in
+    // that first instant does not lose the position it was about to reopen.
+    if (!rememberKey || !restoredRef.current) return;
+
+    const view = views[index];
+    if (!view) return;
+
+    const pageNumber = view.pages[0].pageId;
+    try {
+      window.sessionStorage.setItem(rememberKey, String(pageNumber));
+    } catch {
+      // Storage unavailable; the URL below still carries the position.
+    }
+
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("page") !== String(pageNumber)) {
+      url.searchParams.set("page", String(pageNumber));
+      window.history.replaceState(null, "", url);
+    }
+  }, [index, views, rememberKey]);
 
   const settle = useCallback(() => {
     const active = flipRef.current;
@@ -230,12 +368,11 @@ export default function BookViewer({
       {renderToolbar && <div className="viewer__toolbar">{renderToolbar(current)}</div>}
 
       <div className="book">
-        <div className="slot slot--left">
-          <Half half={leftHalf} />
-        </div>
-        <div className="slot slot--right">
-          <Half half={rightHalf} />
-        </div>
+        {/* Only the static slots open the zoom. The turning leaf renders these
+            same halves onto its faces during a flip, so a click target there
+            would ride the animation. */}
+        <ZoomableSlot side="left" half={leftHalf} onOpen={setZoomed} busy={!!flip} />
+        <ZoomableSlot side="right" half={rightHalf} onOpen={setZoomed} busy={!!flip} />
 
         {flip && (
           <div
@@ -262,6 +399,23 @@ export default function BookViewer({
 
         <div className="spine" aria-hidden="true" />
       </div>
+
+      {/* The transcribed opening of whatever is on screen, set in the hand it
+          was written in.
+
+          This is the only surface that shows first_line as prose rather than as
+          a row in a list. The other four -- this viewer's filter, /search, the
+          admin index, the reorder list -- are all things you scan quickly for a
+          match, and a script face measurably slows that down. So the hand goes
+          here and nowhere else. */}
+      {current.pages.some((page) => page.firstLine) && (
+        <p className="viewer__line">
+          {current.pages
+            .filter((page) => page.firstLine)
+            .map((page) => page.firstLine)
+            .join(" · ")}
+        </p>
+      )}
 
       <nav className="controls">
         <button type="button" onClick={() => go("prev")} disabled={index === 0 || !!flip}>
@@ -307,6 +461,15 @@ export default function BookViewer({
             {jumpError}
           </p>
         </div>
+
+        <button
+          type="button"
+          className="controls__zoom"
+          onClick={() => setZoomed(current.pages[0])}
+          disabled={!!flip}
+        >
+          Zoom
+        </button>
 
         <button
           type="button"
@@ -373,6 +536,18 @@ export default function BookViewer({
           </div>
         )}
       </section>
+
+      {zoomed && (
+        <PageZoom
+          page={zoomed}
+          label={
+            zoomed.pageCount === 1
+              ? `Page ${zoomed.pageId}`
+              : `Pages ${zoomed.pageId}–${zoomed.pageId + zoomed.pageCount - 1}`
+          }
+          onClose={() => setZoomed(null)}
+        />
+      )}
 
       {/* Only the immediate neighbours are fetched ahead, so a flip never stalls
           while the rest of the diary stays unrequested. */}

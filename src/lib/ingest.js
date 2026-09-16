@@ -14,10 +14,20 @@
 import path from "node:path";
 import sharp from "sharp";
 
-import { DIARY_ID } from "./pages.js";
+import { DEFAULT_DIARY_ID } from "./pages.js";
 
-/** Widest a stored page gets. Bigger buys nothing on screen and costs storage. */
-export const MAX_WIDTH = 1600;
+/**
+ * Widest a stored page gets.
+ *
+ * 2400 rather than 1600, which never actually bound anything: the existing
+ * scans are 1024px at source, so the cap threw nothing away. It exists for the
+ * scans that come later -- a page photographed properly is worth keeping at a
+ * resolution you can still read when zoomed, and downsampling it on the way in
+ * would be an irreversible loss for no benefit.
+ *
+ * Nothing existing changes: the pipeline only ever shrinks (withoutEnlargement).
+ */
+export const MAX_WIDTH = 2400;
 
 /**
  * JPEG, not PNG, and quality 85.
@@ -117,7 +127,7 @@ export async function analyse(original, { pageCountOverride } = {}) {
 }
 
 /** The first page number not already spoken for. */
-export async function nextFreePageId(supabase, diaryId = DIARY_ID) {
+export async function nextFreePageId(supabase, diaryId = DEFAULT_DIARY_ID) {
   const { data, error } = await supabase
     .from("pages")
     .select("page_id, page_count")

@@ -11,7 +11,7 @@ import {
   readPlan,
   writePlan,
 } from "@/lib/ingest-staging";
-import { DIARY_ID, storageKeyFor } from "@/lib/pages";
+import { storageKeyFor } from "@/lib/pages";
 import { BUCKET, getSupabase } from "@/lib/supabase";
 
 const SCANS_DIR = path.join(process.cwd(), "images");
@@ -39,7 +39,15 @@ export async function POST(request) {
     return json({ ok: false, message: "Malformed request." }, 400);
   }
 
-  const { stagingId, items } = body ?? {};
+  const { stagingId, items, diaryId: rawDiaryId } = body ?? {};
+
+  // Which book these pages join. Validated here rather than trusted, and used
+  // for the storage key prefix as well as the row, so two diaries can both have
+  // a page 1 without colliding in the bucket.
+  const diaryId = Number(rawDiaryId);
+  if (!Number.isInteger(diaryId) || diaryId < 1) {
+    return json({ ok: false, message: "Invalid diary." }, 400);
+  }
 
   let plan;
   try {
@@ -71,7 +79,7 @@ export async function POST(request) {
   const supabase = getSupabase();
   let pageId;
   try {
-    pageId = await nextFreePageId(supabase);
+    pageId = await nextFreePageId(supabase, diaryId);
   } catch (error) {
     return json({ ok: false, message: error.message }, 502);
   }
@@ -84,7 +92,7 @@ export async function POST(request) {
   // before a failure stays -- it is already a real page -- and is reported.
   for (const item of plan.items) {
     const pageCount = counts.get(item.index) ?? item.pageCount;
-    const key = storageKeyFor(pageId);
+    const key = storageKeyFor(pageId, diaryId);
 
     try {
       const bytes = await readDerived(stagingId, item.index);
@@ -97,7 +105,7 @@ export async function POST(request) {
       if (uploadError) throw new Error(`upload of ${key} failed: ${uploadError.message}`);
 
       const { error: rowError } = await supabase.from("pages").insert({
-        diary_id: DIARY_ID,
+        diary_id: diaryId,
         page_id: pageId,
         storage_key: key,
         page_count: pageCount,
@@ -166,7 +174,7 @@ export async function POST(request) {
 
   await discard(stagingId);
 
-  revalidatePath("/");
+  revalidatePath("/", "layout");
   revalidatePath("/admin", "layout");
 
   return json({

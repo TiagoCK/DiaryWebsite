@@ -3,21 +3,45 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const TABS = [
-  { href: "/admin/upload", label: "Upload" },
-  { href: "/admin/pages", label: "Page index" },
-  { href: "/admin/people", label: "People" },
-  { href: "/admin/editor", label: "Image Editor" },
-  { href: "/admin/order", label: "Order" },
+/**
+ * Admin navigation.
+ *
+ * Most tabs belong to a diary, so the slug is read out of the path rather than
+ * threaded down through every page: the layout renders this above routes that
+ * may or may not be inside a diary, and a prop would have to be plumbed through
+ * the ones that are not.
+ */
+const DIARY_TABS = [
+  { segment: "upload", label: "Upload" },
+  { segment: "pages", label: "Page index" },
+  { segment: "editor", label: "Image Editor" },
+  { segment: "order", label: "Order" },
 ];
 
 export default function AdminNav() {
   const pathname = usePathname();
+  const slug = pathname.match(/^\/admin\/d\/([^/]+)/)?.[1] ?? null;
+
+  const tabs = [
+    { href: "/admin", label: slug ? "← All diaries" : "Diaries" },
+    ...(slug
+      ? DIARY_TABS.map((tab) => ({
+          href: `/admin/d/${slug}/${tab.segment}`,
+          label: tab.label,
+        }))
+      : []),
+    { href: "/admin/people", label: "People" },
+  ];
 
   return (
     <nav className="adminnav">
-      {TABS.map((tab) => {
-        const active = pathname === tab.href || pathname.startsWith(`${tab.href}/`);
+      {tabs.map((tab) => {
+        // "/admin" would otherwise light up on every admin page.
+        const active =
+          tab.href === "/admin"
+            ? pathname === "/admin"
+            : pathname === tab.href || pathname.startsWith(`${tab.href}/`);
+
         return (
           <Link
             key={tab.href}

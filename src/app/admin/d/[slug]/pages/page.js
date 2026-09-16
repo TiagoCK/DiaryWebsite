@@ -5,19 +5,22 @@ import { getPages } from "@/lib/pages";
 import { coverage, searchPages } from "@/lib/search";
 import ActionForm from "@/components/ActionForm";
 import HighlightedLine from "@/components/HighlightedLine";
-import { updateFirstLine } from "../actions";
+import { requireDiary } from "@/lib/diaries";
+import { updateFirstLine } from "@/app/admin/actions";
 
 export const dynamic = "force-dynamic";
 
-export default async function PageIndex({ searchParams }) {
-  await requireAdmin();
+export default async function PageIndex({ params, searchParams }) {
+  const admin = await requireAdmin();
+  const { slug } = await params;
+  const diary = await requireDiary(slug, admin);
 
-  const params = await searchParams;
-  const raw = params.q;
+  const search = await searchParams;
+  const raw = search.q;
   const query = (Array.isArray(raw) ? raw[0] : raw ?? "").toString();
-  const blankOnly = params.blank === "1";
+  const blankOnly = search.blank === "1";
 
-  const pages = await getPages();
+  const pages = await getPages(diary.id);
   const { filled, total, blank } = coverage(pages);
 
   // Blank-only wins over the query: a scan with no first line cannot match a
@@ -30,13 +33,13 @@ export default async function PageIndex({ searchParams }) {
 
   return (
     <>
-      <h2>Page index</h2>
+      <h2>Page index — {diary.title}</h2>
       <p className="admin__note">
         The first line of each scan, used for searching. A spread covers two
         pages &mdash; use the left-hand page and stay consistent.
       </p>
 
-      <form className="pagesearch" method="get" action="/admin/pages">
+      <form className="pagesearch" method="get" action={`/admin/d/${diary.slug}/pages`}>
         <label className="pagesearch__label" htmlFor="q">
           Search first lines
         </label>
@@ -53,7 +56,7 @@ export default async function PageIndex({ searchParams }) {
             filters are just URLs and both survive JavaScript being off. */}
         <Link
           className={`pagesearch__toggle${blankOnly ? " pagesearch__toggle--on" : ""}`}
-          href={blankOnly ? "/admin/pages" : "/admin/pages?blank=1"}
+          href={blankOnly ? `/admin/d/${diary.slug}/pages` : `/admin/d/${diary.slug}/pages?blank=1`}
         >
           {blankOnly ? "Show all" : `Show blank only (${blank})`}
         </Link>
@@ -87,6 +90,7 @@ export default async function PageIndex({ searchParams }) {
               // Keying this way makes React move the whole row, box included.
               <li key={page.contentId} className="admin__row">
                 <ActionForm action={updateFirstLine}>
+                  <input type="hidden" name="diaryId" value={diary.id} />
                   <input type="hidden" name="pageId" value={page.pageId} />
                   <span className="admin__span">{span}</span>
                   <input

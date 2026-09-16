@@ -3,7 +3,6 @@
 import sharp from "sharp";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
-import { DIARY_ID } from "@/lib/pages";
 import { clampPercent, sanitiseBox } from "@/lib/redaction";
 import { BUCKET, getSupabase, originalKeyFor } from "@/lib/supabase";
 
@@ -11,14 +10,14 @@ const ROTATIONS = [0, 90, 180, 270];
 const JPEG_QUALITY = 85;
 const MAX_BARS = 50;
 
-async function loadRow(pageId) {
+async function loadRow(diaryId, pageId) {
   const { data, error } = await getSupabase()
     .from("pages")
     // "*" so a missing column degrades to a default instead of throwing. Writes
     // that genuinely need the column still fail, but with a clear message from
     // the one admin action involved rather than taking the whole site down.
     .select("*")
-    .eq("diary_id", DIARY_ID)
+    .eq("diary_id", diaryId)
     .eq("page_id", pageId)
     .maybeSingle();
   if (error) throw new Error(error.message);
@@ -153,14 +152,19 @@ async function publish(row, { rotation, crop, boxes }) {
  * edits cost one re-encode from the scan as uploaded rather than compounding
  * JPEG loss, and a crop can later be widened again.
  */
-export async function saveImageEdit({ pageId, rotation, crop }) {
+export async function saveImageEdit({ diaryId: diaryIdRaw, pageId, rotation, crop }) {
   await requireAdmin();
 
   const id = Number(pageId);
   if (!Number.isInteger(id) || id < 1) return { ok: false, message: "Invalid page." };
+
+  const diaryId = Number(diaryIdRaw);
+  if (!Number.isInteger(diaryId) || diaryId < 1) {
+    return { ok: false, message: "Invalid diary." };
+  }
   if (!ROTATIONS.includes(rotation)) return { ok: false, message: "Invalid rotation." };
 
-  const row = await loadRow(id);
+  const row = await loadRow(diaryId, id);
   if (!row) return { ok: false, message: "No such page." };
 
   // A crop that was sent but has no usable area is an error, not a request to
@@ -176,7 +180,7 @@ export async function saveImageEdit({ pageId, rotation, crop }) {
       // Carried through: dropping them here would republish the page uncensored.
       boxes: row.redaction_boxes ?? [],
     });
-    await writeRow(id, {
+    await writeRow(diaryId, id, {
       original_key: result.originalKey,
       edit_rotation: rotation,
       edit_crop: cleanCrop,
@@ -199,11 +203,16 @@ export async function saveImageEdit({ pageId, rotation, crop }) {
  * republishes the page uncensored -- deliberate, and the reason the original is
  * kept rather than destroyed.
  */
-export async function setRedactionBoxes({ pageId, boxes }) {
+export async function setRedactionBoxes({ diaryId: diaryIdRaw, pageId, boxes }) {
   await requireAdmin();
 
   const id = Number(pageId);
   if (!Number.isInteger(id) || id < 1) return { ok: false, message: "Invalid page." };
+
+  const diaryId = Number(diaryIdRaw);
+  if (!Number.isInteger(diaryId) || diaryId < 1) {
+    return { ok: false, message: "Invalid diary." };
+  }
   if (!Array.isArray(boxes)) return { ok: false, message: "Invalid bars." };
   if (boxes.length > MAX_BARS) {
     return { ok: false, message: `At most ${MAX_BARS} bars.` };
@@ -214,7 +223,7 @@ export async function setRedactionBoxes({ pageId, boxes }) {
     return { ok: false, message: "Those bars have no usable area." };
   }
 
-  const row = await loadRow(id);
+  const row = await loadRow(diaryId, id);
   if (!row) return { ok: false, message: "No such page." };
 
   try {
@@ -223,7 +232,7 @@ export async function setRedactionBoxes({ pageId, boxes }) {
       crop: row.edit_crop ?? null,
       boxes: clean,
     });
-    await writeRow(id, {
+    await writeRow(diaryId, id, {
       original_key: result.originalKey,
       redaction_boxes: clean.length ? clean : null,
       redacted_at: clean.length ? new Date().toISOString() : null,
@@ -239,13 +248,18 @@ export async function setRedactionBoxes({ pageId, boxes }) {
 }
 
 /** Clear rotation and cropping. Bars are kept -- removing those is separate. */
-export async function revertImage({ pageId }) {
+export async function revertImage({ diaryId: diaryIdRaw, pageId }) {
   await requireAdmin();
 
   const id = Number(pageId);
   if (!Number.isInteger(id) || id < 1) return { ok: false, message: "Invalid page." };
 
-  const row = await loadRow(id);
+  const diaryId = Number(diaryIdRaw);
+  if (!Number.isInteger(diaryId) || diaryId < 1) {
+    return { ok: false, message: "Invalid diary." };
+  }
+
+  const row = await loadRow(diaryId, id);
   if (!row?.original_key) {
     return { ok: false, message: "This page has no stored original." };
   }
@@ -256,7 +270,7 @@ export async function revertImage({ pageId }) {
       crop: null,
       boxes: row.redaction_boxes ?? [],
     });
-    await writeRow(id, {
+    await writeRow(diaryId, id, {
       edit_rotation: 0,
       edit_crop: null,
       width: result.width,
@@ -283,14 +297,19 @@ export async function revertImage({ pageId }) {
  * that is the only full-resolution copy, and deleting someone's master because
  * they tidied a page out of the diary is not a decision this should make.
  */
-export async function deletePage({ pageId, confirm }) {
+export async function deletePage({ diaryId: diaryIdRaw, pageId, confirm }) {
   await requireAdmin();
 
   const id = Number(pageId);
   if (!Number.isInteger(id) || id < 1) return { ok: false, message: "Invalid page." };
+
+  const diaryId = Number(diaryIdRaw);
+  if (!Number.isInteger(diaryId) || diaryId < 1) {
+    return { ok: false, message: "Invalid diary." };
+  }
   if (confirm !== true) return { ok: false, message: "Not confirmed." };
 
-  const row = await loadRow(id);
+  const row = await loadRow(diaryId, id);
   if (!row) return { ok: false, message: "No such page." };
 
   const span =
@@ -301,7 +320,7 @@ export async function deletePage({ pageId, confirm }) {
   const db = getSupabase();
 
   const { data: lastPage, error } = await db.rpc("delete_diary_page", {
-    p_diary_id: DIARY_ID,
+    p_diary_id: diaryId,
     p_storage_key: row.storage_key,
   });
   if (error) return { ok: false, message: error.message };
@@ -326,11 +345,11 @@ export async function deletePage({ pageId, confirm }) {
   };
 }
 
-async function writeRow(pageId, patch) {
+async function writeRow(diaryId, pageId, patch) {
   const { error } = await getSupabase()
     .from("pages")
     .update(patch)
-    .eq("diary_id", DIARY_ID)
+    .eq("diary_id", diaryId)
     .eq("page_id", pageId);
   if (error) throw new Error(error.message);
   revalidateEverything();
