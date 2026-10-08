@@ -11,7 +11,7 @@ import {
   slugify,
 } from "../src/lib/diary-rules.js";
 
-/** The CHECK constraint in 0007_diaries.sql, copied so drift is caught here. */
+/** The CHECK constraint in the diaries migration, copied so drift is caught here. */
 const DB_SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 describe("diaries: slugify", () => {
