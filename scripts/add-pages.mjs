@@ -8,6 +8,7 @@
  * Overrides, when the single/spread guess is wrong:
  *   --single=a.jpg,b.jpg    force those files to count as one page
  *   --spread=c.jpg          force those files to count as two
+ *   --diary=2               add to a diary other than the first
  *
  * Adding a page used to mean hand-editing MANIFEST in src/lib/pages.js with the
  * right page number, page count and exact pixel dimensions -- all of which are
@@ -21,7 +22,7 @@
 import { readFile, readdir, rename, copyFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { DIARY_ID, MANIFEST, storageKeyFor } from "../src/lib/pages.js";
+import { DEFAULT_DIARY_ID, MANIFEST, storageKeyFor } from "../src/lib/pages.js";
 import { analyse, IMAGE_EXTENSIONS, nextFreePageId } from "../src/lib/ingest.js";
 import { BUCKET, getSupabase } from "../src/lib/supabase.js";
 
@@ -34,6 +35,20 @@ const EXTENSIONS = IMAGE_EXTENSIONS;
 const argv = process.argv.slice(2);
 const commit = argv.includes("--commit");
 const forcedSingle = namesFromFlag("--single");
+
+/**
+ * Which book these scans join.
+ *
+ * Defaults rather than being required: this script has no request to resolve a
+ * slug from, and it predates there being more than one diary. The in-app
+ * uploader is the multi-diary path.
+ */
+const diaryId = Number(
+  argv.find((a) => a.startsWith("--diary="))?.slice("--diary=".length) ?? DEFAULT_DIARY_ID
+);
+if (!Number.isInteger(diaryId) || diaryId < 1) {
+  throw new Error("--diary must be a diary id (a positive integer).");
+}
 const forcedSpread = namesFromFlag("--spread");
 
 function namesFromFlag(flag) {
@@ -145,7 +160,7 @@ async function main() {
   }
 
   const supabase = getSupabase();
-  let pageId = await nextFreePageId(supabase);
+  let pageId = await nextFreePageId(supabase, diaryId);
 
   console.log(commit ? "COMMITTING\n" : "DRY RUN -- nothing will be written\n");
 
@@ -184,7 +199,7 @@ async function main() {
   // got; per-scan, at most one file is ambiguous and the next dry run shows it.
   const added = [];
   for (const p of planned) {
-    const key = storageKeyFor(p.pageId);
+    const key = storageKeyFor(p.pageId, diaryId);
 
     const { error: uploadError } = await supabase.storage
       .from(BUCKET)
@@ -192,7 +207,7 @@ async function main() {
     if (uploadError) throw new Error(`Upload of ${key} failed: ${uploadError.message}`);
 
     const { error: rowError } = await supabase.from("pages").insert({
-      diary_id: DIARY_ID,
+      diary_id: diaryId,
       page_id: p.pageId,
       storage_key: key,
       page_count: p.pageCount,

@@ -2,37 +2,65 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 import { createAuthClient } from "./supabase-server";
 import { getSupabase } from "./supabase";
+import { isOutage, outageOr, OutageError, PAUSED_PATH } from "./outage.js";
 
 /**
- * The signed-in user and their role, or null.
+ * Who is asking, and whether we could find out at all.
  *
- * Wrapped in React's cache() so the admin layout and the page inside it don't
- * each pay for a token revalidation plus a profile query -- it runs once per
- * request.
+ * Two different nulls live here. "No session" and "could not reach Supabase"
+ * arrive in the same shape -- no user, plus an error -- and they mean opposite
+ * things. One belongs at the login page; the other must never go there, because
+ * a paused project would then present itself as a rejected password.
+ *
+ * Reported as state rather than thrown because the root layout calls this on
+ * every request, including for the paused page itself. A throw here would take
+ * down the one page whose whole job is to explain the outage.
+ *
+ * Wrapped in React's cache() so the root layout, the admin layout and the page
+ * inside it don't each pay for a token revalidation plus a profile query -- it
+ * runs once per request.
  *
  * Deliberately getUser() and not getSession(). getSession() decodes whatever is
  * in the cookie and hands it back without checking it; getUser() revalidates the
  * token against the auth server. Every authorization decision below rests on
  * this, so it has to be the checked one.
  */
-export const getCurrentUser = cache(async function getCurrentUser() {
+export const getAuthState = cache(async function getAuthState() {
   const supabase = await createAuthClient();
   const {
     data: { user },
     error,
   } = await supabase.auth.getUser();
 
-  if (error || !user) return null;
+  if (error && isOutage(error)) return { user: null, outage: true };
+  if (error || !user) return { user: null, outage: false };
 
-  const role = await ensureProfile(user);
-
-  return {
-    id: user.id,
-    email: user.email,
-    role,
-    isAdmin: role === "admin",
-  };
+  try {
+    const role = await ensureProfile(user);
+    return {
+      user: { id: user.id, email: user.email, role, isAdmin: role === "admin" },
+      outage: false,
+    };
+  } catch (profileError) {
+    // A profile read that failed because the database is unreachable is the
+    // same outage, found one query later. Anything else is a real fault and is
+    // still raised -- see ensureProfile on why it refuses to guess a role.
+    if (profileError instanceof OutageError) return { user: null, outage: true };
+    throw profileError;
+  }
 });
+
+/**
+ * The signed-in user and their role, or null.
+ *
+ * Null covers both "not signed in" and "could not tell", which is the right
+ * answer for a caller that only decides what to render. Anything making a
+ * routing or authorization decision wants getAuthState(), so it can tell the
+ * two apart.
+ */
+export async function getCurrentUser() {
+  return (await getAuthState()).user;
+}
 
 /**
  * Read a user's role, creating the profile row if it is missing.
@@ -54,32 +82,51 @@ async function ensureProfile(user) {
   const read = () =>
     db.from("profiles").select("role").eq("id", user.id).maybeSingle();
 
-  const { data: existing, error } = await read();
-  if (error) throw new Error(`Could not read your profile: ${error.message}`);
+  // `status` travels alongside: postgrest-js keeps the HTTP status on the
+  // response, not the error, so a paused project is invisible without it.
+  const { data: existing, error, status } = await read();
+  if (error) throw outageOr(error, `Could not read your profile: ${error.message}`, status);
   if (existing) return existing.role;
 
-  const { error: insertError } = await db
+  const { error: insertError, status: insertStatus } = await db
     .from("profiles")
     .upsert({ id: user.id, email: user.email }, { onConflict: "id", ignoreDuplicates: true });
-  if (insertError) throw new Error(`Could not create your profile: ${insertError.message}`);
+  if (insertError)
+    throw outageOr(
+      insertError,
+      `Could not create your profile: ${insertError.message}`,
+      insertStatus
+    );
 
   // Read back rather than trusting the upsert's return: ON CONFLICT DO NOTHING
   // yields no rows when another request created the row first, and inferring
   // "reader" from that empty result would ignore whatever role it actually has.
-  const { data: created, error: rereadError } = await read();
-  if (rereadError) throw new Error(`Could not read your profile: ${rereadError.message}`);
+  const { data: created, error: rereadError, status: rereadStatus } = await read();
+  if (rereadError)
+    throw outageOr(
+      rereadError,
+      `Could not read your profile: ${rereadError.message}`,
+      rereadStatus
+    );
 
   return created?.role ?? "reader";
 }
 
 /**
- * Require a signed-in user, or redirect to the login page.
+ * Require a signed-in user, or redirect: to the paused page if the backing
+ * store is unreachable, to the login page if there is simply no session.
  *
  * Called directly by every protected page and route rather than relying on the
  * middleware, which is a convenience redirect and not the security boundary.
+ *
+ * The outage branch is checked first and deliberately does not fall through to
+ * the login page. Sending someone there would be an invitation to type a
+ * password that cannot be verified, and the failure it produced told them the
+ * password was wrong.
  */
 export async function requireUser(returnTo) {
-  const user = await getCurrentUser();
+  const { user, outage } = await getAuthState();
+  if (outage) redirect(PAUSED_PATH);
   if (!user) {
     const target = returnTo ? `/login?next=${encodeURIComponent(returnTo)}` : "/login";
     redirect(target);

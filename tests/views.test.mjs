@@ -5,6 +5,7 @@ import {
   buildViews,
   frameAspect,
   halfOf,
+  initialViewIndex,
   totalPages,
   viewIndexForPage,
 } from "../src/lib/views.js";
@@ -105,5 +106,70 @@ describe("views", () => {
     // Two 500x900 singles side by side are narrower than one 900x500 spread.
     assert.ok(frameAspect(views) >= 900 / 500);
     assert.equal(frameAspect([]), 1, "a sane default with nothing to measure");
+  });
+});
+
+describe("views: which frame to open on", () => {
+  const views = buildViews(diary());
+
+  it("prefers an explicit link over anything remembered", () => {
+    const { index, source } = initialViewIndex(views, { linkedPage: 5, rememberedPage: 21 });
+    assert.equal(source, "link");
+    assert.equal(index, viewIndexForPage(views, 5));
+  });
+
+  it("falls back to the remembered position when there is no link", () => {
+    const { index, source } = initialViewIndex(views, { rememberedPage: 21 });
+    assert.equal(source, "remembered");
+    assert.equal(index, viewIndexForPage(views, 21));
+  });
+
+  it("opens at the beginning when there is neither", () => {
+    assert.deepEqual(initialViewIndex(views, {}), { index: 0, source: "default" });
+    assert.deepEqual(initialViewIndex(views), { index: 0, source: "default" });
+  });
+
+  it("ignores a link that no longer resolves, and uses the memory instead", () => {
+    // The linked page was removed, or the URL was typed by hand. Falling
+    // through beats opening a blank frame.
+    const { index, source } = initialViewIndex(views, { linkedPage: 999, rememberedPage: 9 });
+    assert.equal(source, "remembered");
+    assert.equal(index, viewIndexForPage(views, 9));
+  });
+
+  it("ignores a remembered page that no longer exists", () => {
+    // The diary shrank -- a page was deleted since this session stored 30.
+    assert.deepEqual(
+      initialViewIndex(views, { rememberedPage: 30 }),
+      { index: 0, source: "default" }
+    );
+  });
+
+  it("survives the junk that browser storage and address bars produce", () => {
+    for (const junk of [null, undefined, "", "  ", "abc", "1e3", NaN, {}, [], "0", "-4", "2.5"]) {
+      const result = initialViewIndex(views, { linkedPage: junk, rememberedPage: junk });
+      assert.equal(result.source, "default", `linked/remembered ${JSON.stringify(junk)}`);
+      assert.equal(result.index, 0);
+    }
+  });
+
+  it("accepts a numeric string, because sessionStorage only stores strings", () => {
+    const { index, source } = initialViewIndex(views, { rememberedPage: "21" });
+    assert.equal(source, "remembered");
+    assert.equal(index, viewIndexForPage(views, 21));
+  });
+
+  it("resolves an interior page number to its frame", () => {
+    // Storing "the page I was on" can land on the second half of a spread.
+    const { index, source } = initialViewIndex(views, { rememberedPage: 4 });
+    assert.equal(source, "remembered");
+    assert.equal(index, viewIndexForPage(views, 3), "same frame as page 3");
+  });
+
+  it("opens at the beginning of an empty diary without throwing", () => {
+    assert.deepEqual(
+      initialViewIndex(buildViews([]), { linkedPage: 1, rememberedPage: 1 }),
+      { index: 0, source: "default" }
+    );
   });
 });

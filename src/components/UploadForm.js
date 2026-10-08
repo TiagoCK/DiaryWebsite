@@ -21,7 +21,7 @@ function commitLabel(items) {
   return `Add ${items.length} scan${items.length === 1 ? "" : "s"} as ${span}`;
 }
 
-export default function UploadForm({ lastPage }) {
+export default function UploadForm({ lastPage, diaryId, diarySlug }) {
   const router = useRouter();
   const fileRef = useRef(null);
 
@@ -97,6 +97,7 @@ export default function UploadForm({ lastPage }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          diaryId,
           stagingId: plan.stagingId,
           items: plan.items.map((item) => ({
             index: item.index,
@@ -189,8 +190,8 @@ export default function UploadForm({ lastPage }) {
             {result.mastersSaved > 0
               ? `${result.mastersSaved} master file(s) copied into images/.`
               : "Masters were not copied — images/ is not writable from here."}{" "}
-            Add first lines from the <Link href="/admin/pages">page index</Link>, or{" "}
-            <Link href={`/?page=${result.added[0]?.pageId}`}>open the first new page</Link>.
+            Add first lines from the <Link href={`/admin/d/${diarySlug}/pages`}>page index</Link>, or{" "}
+            <Link href={`/d/${diarySlug}?page=${result.added[0]?.pageId}`}>open the first new page</Link>.
           </p>
         </div>
       )}

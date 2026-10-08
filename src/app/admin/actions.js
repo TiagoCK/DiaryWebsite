@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
-import { DIARY_ID } from "@/lib/pages";
+import { DIARY_SOURCE } from "@/lib/pages";
+import { normaliseVisibility, prepareDiary } from "@/lib/diary-rules";
 import { getSupabase } from "@/lib/supabase";
 
 const MAX_FIRST_LINE = 500;
@@ -23,6 +24,14 @@ export async function updateFirstLine(_prevState, formData) {
     return { ok: false, message: "Invalid page." };
   }
 
+  // Which book. A page number identifies nothing on its own now that every
+  // diary starts at page 1, so without this a first line could be written onto
+  // the same-numbered page of a different volume.
+  const diaryId = Number(formData.get("diaryId"));
+  if (!Number.isInteger(diaryId) || diaryId < 1) {
+    return { ok: false, message: "Invalid diary." };
+  }
+
   const raw = (formData.get("firstLine") ?? "").toString().trim();
   if (raw.length > MAX_FIRST_LINE) {
     return { ok: false, message: `Too long (max ${MAX_FIRST_LINE} characters).` };
@@ -31,12 +40,12 @@ export async function updateFirstLine(_prevState, formData) {
   const { error } = await getSupabase()
     .from("pages")
     .update({ first_line: raw === "" ? null : raw })
-    .eq("diary_id", DIARY_ID)
+    .eq("diary_id", diaryId)
     .eq("page_id", pageId);
 
   if (error) return { ok: false, message: error.message };
 
-  revalidatePath("/admin/pages");
+  revalidatePath("/admin", "layout");
   return { ok: true, message: "Saved." };
 }
 
@@ -78,4 +87,151 @@ export async function setUserRole(_prevState, formData) {
 
   revalidatePath("/admin/people");
   return { ok: true, message: "Saved." };
+}
+
+/**
+ * Create a diary.
+ *
+ * Until now a second volume meant an INSERT in the Supabase dashboard, which is
+ * exactly the kind of thing the admin section exists to avoid. The naming rules
+ * live in src/lib/diary-rules.js so they can be tested; this is the part that
+ * needs a database.
+ */
+export async function createDiary(_prevState, formData) {
+  await requireAdmin();
+
+  if (DIARY_SOURCE === "local") {
+    return { ok: false, message: "Local mode has no database to create a diary in." };
+  }
+
+  const prepared = prepareDiary({
+    title: formData.get("title"),
+    slug: formData.get("slug"),
+    subtitle: formData.get("subtitle"),
+  });
+  if (!prepared.ok) return { ok: false, message: prepared.message };
+
+  const db = getSupabase();
+
+  // Appended to the shelf. Reading the last position rather than counting rows:
+  // positions are deliberately independent of ids, so a diary reordered or
+  // removed must not make the next one collide.
+  const { data: last, error: readError } = await db
+    .from("diaries")
+    .select("position")
+    .order("position", { ascending: false })
+    .limit(1);
+  if (readError) return { ok: false, message: readError.message };
+
+  const { data, error } = await db
+    .from("diaries")
+    .insert({
+      ...prepared.diary,
+      visibility: normaliseVisibility(formData.get("visibility")),
+      position: (last?.[0]?.position ?? 0) + 1,
+    })
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    // 23505 is a unique violation, which here can only be the slug.
+    if (error.code === "23505") {
+      return {
+        ok: false,
+        message: `The address /d/${prepared.diary.slug} is already taken. Choose another.`,
+      };
+    }
+    return { ok: false, message: error.message };
+  }
+
+  revalidatePath("/", "layout");
+  revalidatePath("/admin", "layout");
+  return {
+    ok: true,
+    message: `Created ${data.title} at /d/${data.slug}. Add scans from its Upload tab.`,
+  };
+}
+
+/**
+ * Remove a diary, but only while it is empty.
+ *
+ * The counterpart to creating one: without it, a typo in a slug would send you
+ * back to the dashboard, which is what this pair is meant to replace. Empty
+ * only, because deleting a book with pages would orphan storage objects that
+ * SQL cannot reach -- the foreign key refuses it too, but a counted check gives
+ * an admin something to act on instead of a constraint violation.
+ */
+export async function deleteDiary(_prevState, formData) {
+  await requireAdmin();
+
+  const diaryId = Number(formData.get("diaryId"));
+  if (!Number.isInteger(diaryId) || diaryId < 1) {
+    return { ok: false, message: "Invalid diary." };
+  }
+
+  const db = getSupabase();
+  const { count, error: countError } = await db
+    .from("pages")
+    .select("page_id", { count: "exact", head: true })
+    .eq("diary_id", diaryId);
+  if (countError) return { ok: false, message: countError.message };
+
+  if (count > 0) {
+    // Scans, not pages: this counts rows, and a row covering a spread is two
+    // page numbers. Saying "14 pages" of a diary whose counter reads 26 would
+    // send someone looking for a discrepancy that is not there.
+    return {
+      ok: false,
+      message: `That diary still has ${count} scan${count === 1 ? "" : "s"}. Remove them first.`,
+    };
+  }
+
+  const { error } = await db.from("diaries").delete().eq("id", diaryId);
+  if (error) return { ok: false, message: error.message };
+
+  revalidatePath("/", "layout");
+  revalidatePath("/admin", "layout");
+  return { ok: true, message: "Diary removed." };
+}
+
+/**
+ * Change who may open a diary.
+ *
+ * Separate from createDiary because it is the one you reach for after the fact:
+ * a volume starts readable and later becomes private, or the reverse when a
+ * synthetic one is ready to show.
+ */
+export async function setDiaryVisibility(_prevState, formData) {
+  await requireAdmin();
+
+  const diaryId = Number(formData.get("diaryId"));
+  if (!Number.isInteger(diaryId) || diaryId < 1) {
+    return { ok: false, message: "Invalid diary." };
+  }
+
+  // normaliseVisibility falls back to "readers" for anything unrecognised, so a
+  // tampered form cannot invent a value the CHECK constraint would reject --
+  // and cannot accidentally open a diary by sending nonsense either, since the
+  // fallback is the value the column already defaults to.
+  const visibility = normaliseVisibility(formData.get("visibility"));
+
+  const { data, error } = await getSupabase()
+    .from("diaries")
+    .update({ visibility })
+    .eq("id", diaryId)
+    .select("title")
+    .maybeSingle();
+
+  if (error) return { ok: false, message: error.message };
+  if (!data) return { ok: false, message: "No such diary." };
+
+  revalidatePath("/", "layout");
+  revalidatePath("/admin", "layout");
+  return {
+    ok: true,
+    message:
+      visibility === "admins"
+        ? `${data.title} is now visible to admins only.`
+        : `${data.title} is now visible to everyone signed in.`,
+  };
 }

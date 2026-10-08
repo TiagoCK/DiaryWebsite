@@ -11,18 +11,18 @@ import BookViewer from "@/components/BookViewer";
  * a flip those halves are also rendered onto the turning leaf's faces -- putting
  * buttons in there would mean buttons riding the animation.
  */
-export default function EditorBrowser({ views, totalPages }) {
+export default function EditorBrowser({ views, totalPages, diarySlug }) {
   return (
     <BookViewer
       views={views}
       totalPages={totalPages}
       animate={false}
-      renderToolbar={(view) => <EditButtons view={view} />}
+      renderToolbar={(view) => <EditButtons view={view} diarySlug={diarySlug} />}
     />
   );
 }
 
-function EditButtons({ view }) {
+function EditButtons({ view, diarySlug }) {
   // One button per image: a spread is a single image covering two pages, while
   // a paired view is two separate images that crop independently.
   const isSpread = view.pages.length === 1 && view.pages[0].pageCount === 2;
@@ -34,7 +34,7 @@ function EditButtons({ view }) {
           ? `Edit spread (pages ${page.pageId}–${page.pageId + 1})`
           : `Edit page ${page.pageId}`;
         return (
-          <Link key={page.contentId} className="edittools__btn" href={`/admin/editor/${page.pageId}`}>
+          <Link key={page.contentId} className="edittools__btn" href={`/admin/d/${diarySlug}/editor/${page.pageId}`}>
             {label}
             {page.isRedacted && <span className="edittools__flag edittools__flag--redacted">redacted</span>}
             {page.hasOriginal && !page.isRedacted && (

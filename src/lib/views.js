@@ -99,6 +99,35 @@ export function totalPages(pages) {
  * src/lib/ordering.js, which rejects an interior number -- reordering has to
  * know which *scan* you mean, while reading only has to know which *frame*.
  */
+/**
+ * Which frame to open on, and why.
+ *
+ * Three sources, in strict order of authority:
+ *
+ *   link        ?page=N in the URL -- somebody followed a link and meant it,
+ *               so it beats whatever the reader was last looking at.
+ *   remembered  where this reading session left off.
+ *   default     the beginning.
+ *
+ * Both inputs are coerced and range-checked, because both arrive from places a
+ * person can edit: one from the address bar, the other from browser storage.
+ * A page number that no longer exists -- the diary shrank, or a page was
+ * removed -- falls through to the next source rather than opening a blank frame.
+ *
+ * Returning the source, not just the index, is what lets the viewer avoid
+ * re-persisting a position it just restored, and lets the tests say which rule
+ * fired rather than only where it landed.
+ */
+export function initialViewIndex(views, { linkedPage, rememberedPage } = {}) {
+  const linked = viewIndexForPage(views, Number(linkedPage));
+  if (linked >= 0) return { index: linked, source: "link" };
+
+  const remembered = viewIndexForPage(views, Number(rememberedPage));
+  if (remembered >= 0) return { index: remembered, source: "remembered" };
+
+  return { index: 0, source: "default" };
+}
+
 export function viewIndexForPage(views, pageNumber) {
   if (!Number.isInteger(pageNumber)) return -1;
 

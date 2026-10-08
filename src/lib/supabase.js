@@ -1,13 +1,18 @@
 import { createClient } from "@supabase/supabase-js";
 
 /**
- * Server-only Supabase client, authenticated with the service-role key.
+ * Server-only Supabase client, authenticated with the secret key.
  *
- * The service-role key bypasses row-level security, so it must never reach the
- * browser. Keeping it in a non-NEXT_PUBLIC_ variable is what enforces that:
+ * The secret key bypasses row-level security, so it must never reach the
+ * browser. Keeping it in a non-NEXT_PUBLIC_ variable is what keeps it out:
  * Next.js only inlines NEXT_PUBLIC_-prefixed variables into client bundles, so
- * importing this module from a client component fails at build time rather
- * than silently shipping the key.
+ * a client component that imported this module would be handed `undefined`
+ * rather than the key. Note that it would still *build* -- the protection is
+ * that the value never ships, not that the mistake is caught early.
+ *
+ * SUPABASE_SECRET_KEY (sb_secret_...) replaces the old SUPABASE_SERVICE_ROLE_KEY.
+ * Same privileges, same rule about never leaving the server; Supabase is
+ * deprecating the legacy key by the end of 2026.
  */
 
 let client = null;
@@ -16,11 +21,11 @@ export function getSupabase() {
   if (client) return client;
 
   const url = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const key = process.env.SUPABASE_SECRET_KEY;
 
   if (!url || !key) {
     throw new Error(
-      "Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY " +
+      "Supabase is not configured. Set SUPABASE_URL and SUPABASE_SECRET_KEY " +
         "in .env.local, or set DIARY_SOURCE=local to read scans from disk instead."
     );
   }

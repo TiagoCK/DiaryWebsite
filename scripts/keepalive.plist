@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template for the local keep-alive agent. Install it with:
+
+      scripts/install-keepalive.sh
+
+  Do not hand-install this file. launchd expands neither ~ nor environment
+  variables, and three of the values below have to be substituted; the installer
+  does that and verifies the result.
+
+  Two things about this plist are the way they are because of macOS privacy
+  protection (TCC), not preference:
+
+  1. __SCRIPT__ points at a COPY of scripts/keepalive.sh outside ~/Documents.
+     A LaunchAgent holds none of the privacy grants your Terminal has, so
+     launchd cannot even read a script stored under ~/Documents -- it fails with
+     "Operation not permitted" before the script runs at all.
+
+  2. The URL and key are in EnvironmentVariables rather than read from
+     .env.local, for the same reason: the agent cannot read that file either.
+     Only the publishable key is ever placed here. It is public by design --
+     Supabase ships it to browsers -- so this is not a secret leaving the
+     machine. The secret key must never appear in this file, and the installer
+     refuses to write one.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.diarywebsite.keepalive</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>__SCRIPT__</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SUPABASE_URL</key>
+    <string>__URL__</string>
+    <key>SUPABASE_PUBLISHABLE_KEY</key>
+    <string>__KEY__</string>
+  </dict>
+
+  <!--
+    Daily, which is more often than strictly needed and costs one HTTPS request.
+    launchd runs a missed calendar job once on wake, so a closed lid delays the
+    ping rather than skipping it.
+  -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>13</integer>
+    <key>Minute</key>
+    <integer>20</integer>
+  </dict>
+
+  <!-- Proves the install works now rather than tomorrow afternoon. -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/diary-keepalive.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/diary-keepalive.log</string>
+
+  <!-- Lowest scheduling priority: nothing here is urgent. -->
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

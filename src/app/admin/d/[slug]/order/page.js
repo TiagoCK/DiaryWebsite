@@ -2,17 +2,20 @@ import ActionForm from "@/components/ActionForm";
 import { requireAdmin } from "@/lib/auth";
 import { DIARY_SOURCE, getPages } from "@/lib/pages";
 import { buildOrder, describeSpan, lastPageNumber } from "@/lib/ordering";
+import { requireDiary } from "@/lib/diaries";
 import { movePage } from "./actions";
 
 export const dynamic = "force-dynamic";
 
-export default async function OrderPage() {
-  await requireAdmin();
+export default async function OrderPage({ params }) {
+  const admin = await requireAdmin();
+  const { slug } = await params;
+  const diary = await requireDiary(slug, admin);
 
   if (DIARY_SOURCE === "local") {
     return (
       <>
-        <h2>Order</h2>
+        <h2>Order — {diary.title}</h2>
         <p className="admin__note">
           Unavailable while <code>DIARY_SOURCE=local</code>. Reordering rewrites page
           numbers in the database. Set <code>DIARY_SOURCE=supabase</code> in{" "}
@@ -22,7 +25,7 @@ export default async function OrderPage() {
     );
   }
 
-  const pages = await getPages();
+  const pages = await getPages(diary.id);
   // getPages() omits storage keys, so none reach the browser; buildOrder only
   // needs page numbers and counts to compute spans.
   const order = buildOrder(pages);
@@ -30,7 +33,7 @@ export default async function OrderPage() {
 
   return (
     <>
-      <h2>Order</h2>
+      <h2>Order — {diary.title}</h2>
       <p className="admin__note">
         Set a scan to a page number and it swaps with whatever starts there. Page
         numbers run 1&ndash;{last}. A spread covers two of them, so only the first
@@ -60,6 +63,7 @@ export default async function OrderPage() {
             </div>
 
             <ActionForm action={movePage} className="order__form">
+              <input type="hidden" name="diaryId" value={diary.id} />
               <input type="hidden" name="pageId" value={page.pageId} />
               <label htmlFor={`target-${page.pageId}`}>Move to page</label>
               <input

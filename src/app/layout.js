@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import "./globals.css";
 import { getCurrentUser } from "@/lib/auth";
+import { fontClassName } from "@/lib/fonts";
 
 export const metadata = {
   title: "My Diary",
@@ -13,7 +14,7 @@ export default async function RootLayout({ children }) {
   const user = await getCurrentUser();
 
   return (
-    <html lang="en">
+    <html lang="en" className={fontClassName}>
       <body>
         <main>
           {user && (
@@ -31,9 +32,6 @@ export default async function RootLayout({ children }) {
                 </Link>
                 {user.isAdmin && (
                   <>
-                    <Link className="topbar__link" href="/admin/upload">
-                      Upload
-                    </Link>
                     <Link className="topbar__link" href="/admin">
                       Admin
                     </Link>
