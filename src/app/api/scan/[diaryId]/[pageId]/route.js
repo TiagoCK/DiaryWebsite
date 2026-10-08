@@ -2,7 +2,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { canSee } from "@/lib/diary-rules";
 import { DIARY_SOURCE, findLocalPage } from "@/lib/pages";
-import { getCurrentUser } from "@/lib/auth";
+import { getAuthState } from "@/lib/auth";
+import { isOutage } from "@/lib/outage.js";
 
 const SCANS_DIR = path.join(process.cwd(), "images");
 
@@ -27,7 +28,12 @@ export async function GET(request, { params }) {
   // 401 rather than a redirect -- the caller is an <img>, not a browser
   // navigation, and a redirect to an HTML login page would just decode as a
   // broken image.
-  const user = await getCurrentUser();
+  //
+  // An unreachable project is a separate answer. It is not that this caller may
+  // not have the image; it is that nobody can be identified and no image can be
+  // fetched, which is a 503 and not a 401.
+  const { user, outage } = await getAuthState();
+  if (outage) return unavailable();
   if (!user) return new Response("Unauthorized", { status: 401 });
 
   const { diaryId: rawDiary, pageId: raw } = await params;
@@ -76,7 +82,8 @@ async function serveFromSupabase(diaryId, pageId, viewer) {
    * requesting /api/scan/<id>/1 directly and reading the images anyway. Page
    * numbers start at 1 in every volume, so guessing costs nothing.
    */
-  const { data: row, error } = await supabase
+  // `status` as well: postgrest-js keeps the HTTP status on the response.
+  const { data: row, error, status } = await supabase
     .from("pages")
     .select("storage_key, diaries!inner(visibility)")
     .eq("diary_id", diaryId)
@@ -85,7 +92,7 @@ async function serveFromSupabase(diaryId, pageId, viewer) {
 
   if (error) {
     console.error(`scan route: diary ${diaryId} page ${pageId} lookup failed:`, error.message);
-    return new Response("Upstream error", { status: 502 });
+    return isOutage(error, status) ? unavailable() : upstreamError();
   }
   if (!row) return notFound();
 
@@ -99,7 +106,7 @@ async function serveFromSupabase(diaryId, pageId, viewer) {
 
   if (signError || !signed?.signedUrl) {
     console.error(`scan route: signing ${row.storage_key} failed:`, signError?.message);
-    return new Response("Upstream error", { status: 502 });
+    return isOutage(signError) ? unavailable() : upstreamError();
   }
 
   // no-store is required, not just polite: a cached redirect would outlive the
@@ -112,6 +119,25 @@ async function serveFromSupabase(diaryId, pageId, viewer) {
 
 function notFound() {
   return new Response("Not found", { status: 404 });
+}
+
+function upstreamError() {
+  return new Response("Upstream error", { status: 502 });
+}
+
+/**
+ * 503 for a project that is paused or otherwise unreachable.
+ *
+ * Distinct from the 502 above, which means Supabase answered and the answer was
+ * broken. Retry-After is the useful part: it says waiting is the fix, which is
+ * true of a paused project and not of a genuine fault. no-store so a proxy
+ * cannot keep serving the outage after the project comes back.
+ */
+function unavailable() {
+  return new Response("The diary is temporarily unavailable", {
+    status: 503,
+    headers: { "Retry-After": "300", "Cache-Control": "no-store" },
+  });
 }
 
 export const dynamic = "force-dynamic";

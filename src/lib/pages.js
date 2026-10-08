@@ -12,6 +12,10 @@
  * local data in that case would be far more confusing than a loud failure.
  */
 
+// Pure and dependency-free, so a static import here pulls in nothing else --
+// unlike ./supabase.js below, which stays lazy so local mode needs no keys.
+import { outageOr } from "./outage.js";
+
 /** Which backing store to read from. */
 export const DIARY_SOURCE = process.env.DIARY_SOURCE === "local" ? "local" : "supabase";
 
@@ -172,7 +176,9 @@ function readLocalPages(diaryId) {
 
 async function readSupabasePages(diaryId) {
   const { getSupabase } = await import("./supabase.js");
-  const { data, error } = await getSupabase()
+  // `status` as well as `error`: postgrest-js leaves the HTTP status on the
+  // response, so a paused project's 540 is invisible from the error alone.
+  const { data, error, status } = await getSupabase()
     .from("pages")
     // select("*") rather than a column list, deliberately. Naming columns makes
     // the app hard-fail the moment the code is ahead of the database -- the gap
@@ -183,7 +189,8 @@ async function readSupabasePages(diaryId) {
     .eq("diary_id", diaryId)
     .order("page_id", { ascending: true });
 
-  if (error) throw new Error(`Could not read pages from Supabase: ${error.message}`);
+  if (error)
+    throw outageOr(error, `Could not read pages from Supabase: ${error.message}`, status);
 
   return (data ?? []).map((row) => ({
     pageId: row.page_id,

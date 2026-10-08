@@ -32,7 +32,7 @@ next photograph might be one. That single fact drives most of the design:
   endpoint that requires an admin.
 - **The database is closed by default.** RLS is on with **no policies**, which
   denies every anon and authenticated request; the app reads through the server
-  with the service-role key. Supabase hands the anon key to browsers by design,
+  with the secret key. Supabase hands the publishable key to browsers by design,
   so anything less would publish the diary index.
 
 ## Architecture
@@ -92,9 +92,9 @@ Supabase → Authentication → Users, where you also set the password. The app 
 no sign-up form, no "create account" link, and no `signUp()` call anywhere.
 
 **One dashboard setting is load-bearing:** Authentication → Sign In / Providers
-→ Email → **"Allow new users to sign up" must be OFF**. The anon key ships to
-every browser, so while that toggle is on, anyone holding it can call `signUp()`
-and create an account no matter what the UI offers.
+→ Email → **"Allow new users to sign up" must be OFF**. The publishable key
+ships to every browser, so while that toggle is on, anyone holding it can call
+`signUp()` and create an account no matter what the UI offers.
 
 No email is ever sent — no confirmations, no password resets — which keeps
 Supabase's rate-limited built-in SMTP out of the picture entirely. If you forget
@@ -125,10 +125,10 @@ role out of the app permanently, since nothing else can grant it.
 
 ### How access is enforced
 
-Every read goes through the Next.js server using the service-role key, so the
+Every read goes through the Next.js server using the secret key, so the
 **server** is the security boundary, not RLS. RLS is still on (with no policies)
 for both `pages` and `profiles`, which is what makes it safe for the browser to
-hold a Supabase client for the login form — the anon key can't read a row.
+hold a Supabase client for the login form — the publishable key can't read a row.
 
 Two things in the code are deliberate and easy to undo by accident:
 
@@ -162,23 +162,197 @@ local data in that case would be more confusing than a loud failure. Set
    and run `supabase/migrations/0001_init.sql` (the `pages` table, with
    row-level security), then `0002_auth.sql` (the `profiles` table, the
    new-user trigger, and RLS on it).
-2. **Set the keys** in `.env.local`: `SUPABASE_URL` and
-   `SUPABASE_SERVICE_ROLE_KEY`.
+2. **Set the keys** in `.env.local`. All four, from Project Settings → API:
+
+   | Variable | Used by |
+   |---|---|
+   | `SUPABASE_URL` | the server, for every data read |
+   | `SUPABASE_SECRET_KEY` | the server. `sb_secret_...`, bypasses RLS; never prefix it `NEXT_PUBLIC_` |
+   | `NEXT_PUBLIC_SUPABASE_URL` | the browser, to sign in. Must equal `SUPABASE_URL` |
+   | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | the browser and the middleware, to sign in. `sb_publishable_...` |
+
+   Without the publishable key there is no sign-in at all, and since every page
+   is behind auth, nothing loads past the login form — `@supabase/ssr` throws on
+   a missing key rather than degrading, so the middleware fails on every
+   request.
+
+   These are the **new** API keys. They replace the legacy `anon` and
+   `service_role` keys, which Supabase is deprecating by the end of 2026:
+   publishable for anything you ship, secret for anything you control. The
+   privileges are identical to the pair they replace, so every argument below
+   about RLS still holds unchanged — the publishable key maps to the Postgres
+   `anon` role, which is what the policies in `supabase/migrations` name.
+
+   Nothing here reads `SUPABASE_JWKS_URL`. Local JWT verification would skip the
+   revocation check that `getUser()` performs, and `src/lib/auth.js` documents
+   why it wants the checked one.
 3. **Add the scans.** See below.
 
 ### Why row-level security matters here
 
-Supabase exposes every table over PostgREST authenticated with the anon key, and
-that key is public by design — it ships to browsers. With RLS off, anyone
-holding it can read the whole diary index.
+Supabase exposes every table over PostgREST authenticated with the publishable
+key, and that key is public by design — it ships to browsers. With RLS off,
+anyone holding it can read the whole diary index.
 
-The migration enables RLS and writes **no policies**, which denies all anon and
-authenticated access while `service_role` bypasses RLS entirely. Every read
-therefore goes through the Next.js server, which holds the service-role key.
-Don't add a policy without deciding who it's for.
+The migration enables RLS and writes **no policies**, which denies all `anon` and
+`authenticated` access while the secret key bypasses RLS entirely. Every read
+therefore goes through the Next.js server, which holds the secret key. Don't add
+a policy without deciding who it's for.
 
 The `diary-scans` bucket is private for the same reason: objects are reachable
 only through short-lived signed URLs minted server-side.
+
+## When the project is paused
+
+A free-plan project pauses after about a week without database activity, and
+every surface — Postgres, auth, storage — then answers HTTP 540 at once.
+
+The thing worth knowing is that this used to produce a **lie**. The middleware
+asked Supabase who you were, an unreachable project answered "no user" plus an
+error, the error was discarded, and you were redirected to the login page —
+where any sign-in failure was reported as `That email and password combination
+didn't work.` A paused project told its owner their password was wrong.
+
+So `src/lib/outage.js` exists to make one distinction the code was not making:
+**unreachable is not unauthorized.** `isOutage(error, status)` recognises a
+transport failure or an availability status and, deliberately, nothing else — a
+wrong password or an RLS refusal must never read as an outage, or it would tell
+someone to wait for a problem that is never going to clear.
+
+With that in place:
+
+| Situation | What happens |
+|---|---|
+| Signed in, project paused | Redirected to `/paused`, which explains it |
+| Not signed in, project paused | `/login`, which says it is unavailable and that your password is not the problem |
+| `/api/scan/...` during a pause | **503** with `Retry-After`, not 401 |
+| A wrong password, project healthy | Unchanged: the password is blamed |
+
+Two subtleties behind that table:
+
+- **A cookie-less visitor still lands on `/login`.** With no session to check,
+  supabase-js never makes a network call, so an outage is genuinely invisible at
+  that point. The login form is where the truth surfaces.
+- **Nothing can leak by letting those requests through.** Every byte of diary
+  content comes from the project that is down, so pages cannot read rows and the
+  scan route cannot mint a signed Storage URL. There is nothing to serve.
+
+`/paused` deliberately names no provider and no restore procedure: during an
+outage auth is down, so it cannot tell the owner from a stranger.
+
+To work while a project is paused, or offline, set `DIARY_SOURCE=local`.
+
+### Why the error has to carry a status
+
+`isOutage()` takes the HTTP status separately because postgrest-js throws it
+away. A paused project yields the error object `{ message: "Project is paused" }`
+and nothing else, while the `540` sits on the *response* — so every data read
+passes `status` alongside `error`. The auth client has the opposite problem: a
+540 with a plain-text body becomes an `AuthUnknownError` whose message is a JSON
+parse failure, with the status gone, which is why that name counts as an outage.
+Both shapes are pinned in `tests/outage.test.mjs`, measured from the real client
+rather than imagined — an earlier invented fixture passed while every real
+paused-project case fell through.
+
+## Keeping the project awake
+
+Prevention, because **a ping cannot wake a paused project** — restoring one is a
+manual click in the dashboard, and after 90 days paused even that is gone. A few
+real database requests a day are enough to keep it from pausing.
+
+`scripts/keepalive.sh` is the whole mechanism: one `curl` issuing one `select`
+against `pages` with the **publishable key**, never the secret key. Two
+schedulers run that one script, so there is no second implementation to drift.
+It exits non-zero on anything but 200, and exits `2` for a 540 with a message
+saying restoring is manual.
+
+It sends the key on the `apikey` header only. Publishable and secret keys are
+opaque strings, not JWTs, and Supabase documents them as belonging there alone —
+`Authorization: Bearer` is accepted for migration compatibility and
+authenticates nobody. Measured against the project: `apikey` alone 200,
+`apikey` + `Bearer` 200, `Bearer` alone 401.
+
+Run it by hand any time:
+
+```bash
+scripts/keepalive.sh
+```
+
+It reads `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` from the environment if they are
+set, and otherwise `SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` out of
+`.env.local` — so this machine keeps exactly one copy of the credentials.
+
+### GitHub Actions, every two days
+
+`.github/workflows/keepalive.yml`. Add two repository secrets under Settings →
+Secrets and variables → Actions: `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY`. A
+failed ping fails the job, which is how you hear about it.
+
+**Known gap:** GitHub disables scheduled workflows after 60 days without a
+commit to the repository — precisely the quiet stretch when this matters. It
+emails first, and re-enabling is one click. The local agent covers that window.
+
+### A launchd agent, daily
+
+```bash
+scripts/install-keepalive.sh
+```
+
+That is the whole install. It prints the paths it used and the result of a real
+ping, and exits non-zero if that ping did not succeed — so a silent failure is
+not a possible outcome. Re-run it any time; it is idempotent, and re-running is
+also how you refresh the installed copy after editing `scripts/keepalive.sh`.
+
+To remove it:
+
+```bash
+scripts/install-keepalive.sh --uninstall
+```
+
+Check on it:
+
+```bash
+tail ~/Library/Logs/diary-keepalive.log
+launchctl print gui/$(id -u)/com.diarywebsite.keepalive
+```
+
+#### Why there is an installer and not a one-line `sed`
+
+Two macOS privacy-protection (TCC) behaviours make the obvious install silently
+useless, and both of them look like a different problem:
+
+1. **A LaunchAgent cannot read anything under `~/Documents`.** It holds none of
+   the privacy grants your Terminal has, so pointing the job straight at
+   `scripts/keepalive.sh` in the repo fails with `Operation not permitted`
+   before the script runs at all. The installer therefore copies the script to
+   `~/Library/Application Support/diary-keepalive/`, which is not protected.
+2. **It cannot read `.env.local` either — and `test -r` still returns true.**
+   The stat succeeds and only the open is denied, so a naive script sees a file
+   that appears present and comes back empty, then reports missing credentials.
+   The installer writes the config into the plist's `EnvironmentVariables`
+   instead, reading it from `.env.local` itself while running as you.
+
+Only the **publishable** key is ever written into the plist. It is public by
+design — Supabase ships it to browsers — so this is not a secret spreading, and
+the installer refuses outright if handed an `sb_secret_` value. The alternative,
+granting Full Disk Access to `/bin/sh`, would hand every shell script on the
+machine access to everything, which is a far worse trade for a daily `curl`.
+
+`scripts/keepalive.plist` in the repo is the template, carrying `__SCRIPT__`,
+`__URL__`, `__KEY__` and `__HOME__` placeholders. Do not hand-install it. The
+installer substitutes them with `plutil` rather than `sed`, so a key containing
+a regex or shell metacharacter cannot corrupt the result.
+
+Notes worth having:
+
+- It is **shell and curl, not Node, deliberately.** launchd hands a job a
+  minimal `PATH` that does not include nvm's node, and nvm's path carries the
+  version number, so it would break on the next upgrade. `/usr/bin/curl` is
+  always there, and the same script runs unchanged on CI.
+- A failure raises a macOS notification, since a launchd job is otherwise
+  silent. One HTTPS request a day: nothing resident, nothing measurable.
+- The installed plist holds absolute paths and a copy of the script, so **after
+  moving the repo, re-run the installer.**
 
 ## Adding pages from the app
 
@@ -354,10 +528,14 @@ src/components/
   BookViewer.js   client component; the page-flip and navigation
 src/lib/
   pages.js        THE SEAM — page data, view assembly, image URLs
+  outage.js       unreachable vs unauthorized (see When the project is paused)
   fonts.js        which font files load (see Typography)
-  supabase.js     server-only client (service-role key)
+  supabase.js     server-only client (secret key)
 scripts/
   add-pages.mjs   append scans from images/incoming/
+  keepalive.sh    one ping, run by both schedulers
+  keepalive.plist launchd template (placeholders; use the installer)
+  install-keepalive.sh  installs the local agent and verifies it
 supabase/migrations/
   0001_init.sql   schema, indexes, RLS
 ```
@@ -476,10 +654,12 @@ the failure is silent and confusing: every server-side query works while every
 sign-in is rejected, because logins go to a project that has none of your data.
 `src/lib/supabase.js` now throws on a mismatch rather than letting it happen.
 
-Secrets go in `.env.local`, which is gitignored — never commit the service-role
-key. It bypasses RLS, so it must stay server-side and must never gain a
-`NEXT_PUBLIC_` prefix. Editor swap files (`.env.local.swp`) are ignored too,
-since they hold the contents of whatever you were editing.
+Secrets go in `.env.local`, which is gitignored — never commit the secret key.
+It bypasses RLS, so it must stay server-side and must never gain a
+`NEXT_PUBLIC_` prefix. The publishable key is the opposite: it is *meant* to
+ship, which is why it carries the prefix and why RLS being closed is what
+actually protects the diary. Editor swap files (`.env.local.swp`) are ignored
+too, since they hold the contents of whatever you were editing.
 
 This app is not statically exported, so it needs a host that runs Node (Vercel,
 or similar). GitHub Pages serves static files only and can't host it.

@@ -1,0 +1,40 @@
+name: Keep Supabase awake
+
+# A free-plan project pauses after about a week without database activity, and
+# a paused project cannot be woken by a request -- restoring it is a manual
+# click in the dashboard. This runs the same script the local launchd agent
+# runs; see scripts/keepalive.sh.
+#
+# KNOWN GAP: GitHub disables scheduled workflows after 60 days without a commit
+# to the repository -- precisely the quiet stretch when this matters most. It
+# emails first and re-enabling is one click. The launchd agent on the laptop
+# covers that window, which is why there are two schedulers.
+
+on:
+  schedule:
+    # Every other day, well inside the one-week window, so two consecutive
+    # misses still do not reach a pause. Scheduled runs are best-effort and can
+    # be delayed under load; at this cadence that does not matter.
+    - cron: "17 7 */2 * *"
+  workflow_dispatch:
+
+# Read-only: this job pings a URL. It has no reason to touch the repository.
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The publishable key, not the secret key. Supabase ships the publishable
+      # key to browsers by design, so holding a copy here expands nothing; the
+      # secret key bypasses row-level security and must never leave a server.
+      # A non-zero exit fails the job, which is how you find out.
+      - name: Ping the project
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: ./scripts/keepalive.sh

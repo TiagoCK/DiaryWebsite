@@ -459,6 +459,31 @@ code {
   }
 }
 
+/* ---------- unavailable ---------- */
+
+/*
+ * Reuses the type tokens and --muted rather than introducing a palette of its
+ * own: an outage page that looks like a different site reads as a worse
+ * failure than it is.
+ */
+.paused {
+  max-width: 32rem;
+  margin: 3rem auto;
+  text-align: center;
+}
+
+.paused h2 {
+  font-family: var(--font-display);
+  font-size: calc(1.4rem * var(--font-hand-scale));
+  font-weight: 600;
+  margin: 0 0 0.75rem;
+}
+
+.paused p {
+  color: var(--muted);
+  margin: 0 0 1rem;
+}
+
 /* ---------- admin ---------- */
 
 .admin h2 {

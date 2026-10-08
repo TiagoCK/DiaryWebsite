@@ -12,6 +12,7 @@
 import { notFound } from "next/navigation";
 
 import { canSee, DEFAULT_VISIBILITY } from "./diary-rules.js";
+import { outageOr } from "./outage.js";
 import { DEFAULT_DIARY_ID, DIARY_SOURCE } from "./pages.js";
 
 /**
@@ -44,7 +45,8 @@ export async function getDiaries(viewer) {
   if (DIARY_SOURCE === "local") return [LOCAL_DIARY];
 
   const { getSupabase } = await import("./supabase.js");
-  const { data, error } = await getSupabase()
+  // `status` as well as `error`: see readSupabasePages() in ./pages.js.
+  const { data, error, status } = await getSupabase()
     .from("diaries")
     // select("*") for the same reason as pages: a column added in code before
     // its migration has run should degrade, not take the whole site down.
@@ -52,7 +54,7 @@ export async function getDiaries(viewer) {
     .order("position", { ascending: true })
     .order("id", { ascending: true });
 
-  if (error) throw new Error(`Could not read diaries: ${error.message}`);
+  if (error) throw outageOr(error, `Could not read diaries: ${error.message}`, status);
   return (data ?? []).map(toDiary).filter((diary) => canSee(diary, viewer));
 }
 
@@ -65,13 +67,13 @@ export async function getDiaryBySlug(slug, viewer) {
   if (DIARY_SOURCE === "local") return slug === LOCAL_DIARY.slug ? LOCAL_DIARY : null;
 
   const { getSupabase } = await import("./supabase.js");
-  const { data, error } = await getSupabase()
+  const { data, error, status } = await getSupabase()
     .from("diaries")
     .select("*")
     .eq("slug", slug)
     .maybeSingle();
 
-  if (error) throw new Error(`Could not read diary ${slug}: ${error.message}`);
+  if (error) throw outageOr(error, `Could not read diary ${slug}: ${error.message}`, status);
   if (!data) return null;
   const diary = toDiary(data);
   return canSee(diary, viewer) ? diary : null;

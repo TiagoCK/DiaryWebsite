@@ -3,6 +3,7 @@
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase-browser";
+import { isOutage } from "@/lib/outage.js";
 
 /**
  * Sign-in form.
@@ -32,10 +33,23 @@ function LoginForm() {
     });
 
     if (signInError) {
-      // Supabase returns a single generic message for both a wrong password and
-      // an address that has no account, which is what you want -- a specific
-      // message would confirm which addresses are registered.
-      setError("That email and password combination didn't work.");
+      /*
+       * Two very different failures, and they used to share one message.
+       *
+       * Supabase returns a single generic message for both a wrong password and
+       * an address that has no account, which is what you want -- a specific
+       * message would confirm which addresses are registered. That reasoning is
+       * about *refusals*, though, and it was being applied to everything: a
+       * paused project could not be reached at all, and this form told the owner
+       * their password was wrong. Saying "unavailable" when nothing was checked
+       * reveals nothing about which accounts exist, so the property above is
+       * untouched.
+       */
+      setError(
+        isOutage(signInError)
+          ? "The diary is temporarily unavailable. Nothing is wrong with your password -- try again in a few minutes."
+          : "That email and password combination didn't work."
+      );
       setBusy(false);
       return;
     }

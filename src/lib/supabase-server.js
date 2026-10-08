@@ -4,16 +4,17 @@ import { createServerClient } from "@supabase/ssr";
 /**
  * Supabase auth client bound to the request's cookies.
  *
- * Uses the anon key deliberately: this client exists to identify *who is asking*,
- * not to fetch data. Data access uses the service-role client in ./supabase.js.
- * Handing this one the service-role key would let a forged cookie read anything.
+ * Uses the publishable key deliberately: this client exists to identify *who is
+ * asking*, not to fetch data. Data access uses the secret-key client in
+ * ./supabase.js. Handing this one the secret key would let a forged cookie read
+ * anything.
  */
 export async function createAuthClient() {
   const cookieStore = await cookies();
 
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
     {
       cookies: {
         getAll() {
