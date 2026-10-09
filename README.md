@@ -158,10 +158,18 @@ local data in that case would be more confusing than a loud failure. Set
 
 ## First-time Supabase setup
 
-1. **Run the migrations.** Supabase dashboard → SQL Editor → New query. Paste
-   and run `supabase/migrations/0001_init.sql` (the `pages` table, with
-   row-level security), then `0002_auth.sql` (the `profiles` table, the
-   new-user trigger, and RLS on it).
+1. **Apply the migrations** with the CLI, not by pasting SQL:
+
+   ```bash
+   brew install supabase/tap/supabase
+   supabase link --project-ref <your-project-ref>
+   supabase db push
+   ```
+
+   `db push` applies only what the remote has not seen and records each one in
+   its history table, so "which migrations have run?" stops being a question you
+   answer by reading git log. It needs no container runtime — only the local
+   stack does.
 2. **Set the keys** in `.env.local`. All four, from Project Settings → API:
 
    | Variable | Used by |
@@ -354,6 +362,73 @@ Notes worth having:
 - The installed plist holds absolute paths and a copy of the script, so **after
   moving the repo, re-run the installer.**
 
+## The local Supabase stack
+
+Optional, and worth it for one specific reason: until now the migrations had
+**never been replayed from scratch**, so nobody knew whether they applied
+cleanly in order — and the two SQL functions that renumber
+(`..._reorder.sql`) or delete (`..._delete_page.sql`) every page of a diary had
+only ever run against the database holding the irreplaceable content.
+
+```bash
+supabase start          # Postgres, auth, storage, Studio on localhost
+scripts/dev-local.sh    # the app, pointed at them
+supabase stop           # when you are done
+```
+
+`supabase db reset` rebuilds the local database from zero. That is the command
+that proves the schema, and it is how the missing `diary-scans` bucket was
+found: nothing in this repository created it any more, so the project could not
+be rebuilt from its own source. `..._scans_bucket.sql` now declares it.
+
+`scripts/dev-local.sh` reads the local URL and keys from `supabase status` at
+launch and exports them, which Next prefers over `.env.local`. So there is no
+second credentials file to go stale, and `.env.local` is never touched — it
+keeps pointing at the hosted project, as does `scripts/keepalive.sh`.
+
+### What it costs
+
+The cost is the stack, not Docker. Quit the runtime and the impact is disk only;
+Docker Desktop idling with Resource Saver is close to nothing. What you feel is
+`supabase start`, and Supabase suggests budgeting ~7 GB of RAM for the full set
+of services.
+
+So `supabase/config.toml` turns off the ones this project does not use, and the
+saving is real — **eight containers instead of fourteen**:
+
+| Service | Why it is off |
+|---|---|
+| `analytics` | Logflare plus a vector collector, the heaviest part by memory |
+| `realtime` | Nothing here subscribes to changes — no `.channel()` anywhere in `src/` |
+| `edge_runtime` | There is no `supabase/functions` directory |
+
+`imgproxy`, `vector` and `pooler` fall away with them. Studio stays on, because
+being able to look at the local database is most of the point; turn it off in
+`config.toml` if you would rather have the memory back.
+
+On macOS, **OrbStack** is lighter than Docker Desktop and is what Supabase now
+recommends. Note that the Supabase CLI shells out to a `docker` binary rather
+than talking to the socket, so the client has to be on `PATH`:
+
+```bash
+brew install --cask orbstack   # the engine
+brew install docker            # just the client the CLI calls
+```
+
+Open OrbStack once so it finishes its own setup and puts a socket at the default
+path; until then, export
+`DOCKER_HOST="unix://$HOME/.orbstack/run/docker.sock"` (which
+`scripts/dev-local.sh` does for you).
+
+### What it does not do
+
+It does not containerise the app, and it should not. The app treats the host
+filesystem as the master copy of irreplaceable data — it writes full-resolution
+scans into `images/` and regenerates `src/lib/manifest.generated.json` — so a
+container would add a path where the only copy of a scan lands in an ephemeral
+layer. CI has no use for it either: the suite already runs on two Node versions
+with no credentials at all.
+
 ## Adding pages from the app
 
 **Admin → Upload**, or the Upload link in the banner. Takes one image, or a PDF
@@ -533,11 +608,13 @@ src/lib/
   supabase.js     server-only client (secret key)
 scripts/
   add-pages.mjs   append scans from images/incoming/
+  dev-local.sh    run the app against the local Supabase stack
   keepalive.sh    one ping, run by both schedulers
   keepalive.plist launchd template (placeholders; use the installer)
   install-keepalive.sh  installs the local agent and verifies it
-supabase/migrations/
-  0001_init.sql   schema, indexes, RLS
+supabase/
+  config.toml     local stack: which services run (several are off)
+  migrations/     timestamped SQL, applied by `supabase db push`
 ```
 
 Imports can use the `@/` alias for anything under `src/`.

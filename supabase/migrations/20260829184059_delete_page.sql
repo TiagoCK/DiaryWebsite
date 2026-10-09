@@ -13,7 +13,7 @@
 -- the surviving keys in page order ARE the new order, so there is no second
 -- implementation of dense numbering to keep in step with the first.
 --
--- Requires 0005_reorder.sql.
+-- Requires the reorder migration (..._reorder.sql), which this builds on.
 --
 -- Safe to re-run.
 
