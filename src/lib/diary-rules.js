@@ -79,27 +79,55 @@ export function prepareDiary({ title, slug, subtitle } = {}) {
 /**
  * Who may open a diary.
  *
+ *   public   anyone at all, with no account and no session
  *   readers  anyone signed in
  *   admins   admins only
+ *
+ * Ordered least private to most, which is the order the admin controls offer.
  */
-export const VISIBILITIES = ["readers", "admins"];
+export const VISIBILITIES = ["public", "readers", "admins"];
+
+/**
+ * What a new volume gets, and what an unrecognised value falls back to.
+ *
+ * Deliberately NOT `public`. Nothing should become world-readable by forgetting
+ * to choose, or by a column arriving from a database that has not run the
+ * migration yet.
+ */
 export const DEFAULT_VISIBILITY = "readers";
 
 /**
- * May this viewer see this diary?
+ * May this viewer see this diary? `viewer` may be null.
  *
  * One rule, in one place, because it is checked from five different surfaces --
  * the shelf, the reader, search, the admin list and the image route -- and a
  * copy of it that drifted would be a hole rather than an inconsistency.
  *
- * Unknown or missing visibility is treated as `readers`, matching the column
- * default: a diary created before this migration ran must stay readable rather
- * than silently vanishing from everyone's shelf.
+ * The null-viewer cases are the ones that matter. This function used to read
+ * `if (visibility !== "admins") return true`, which was correct only because
+ * the proxy guaranteed every request already had a session. It no longer does:
+ * anonymous requests now reach the pages so that a `public` volume can be read
+ * without an account. Under the old rule they would have been handed every
+ * `readers` volume as well.
  */
 export function canSee(diary, viewer) {
   if (!diary) return false;
-  if (diary.visibility !== "admins") return true;
-  return viewer?.isAdmin === true;
+
+  switch (diary.visibility) {
+    case "public":
+      return true;
+    case "admins":
+      return viewer?.isAdmin === true;
+    default:
+      /*
+       * Anything unrecognised is treated as `readers`, matching the column
+       * default -- a row written before the migration ran must stay readable
+       * rather than silently vanishing from everyone's shelf. What changed is
+       * which way that errs: "needs a session" rather than "anyone", because
+       * the fallback is now reachable by a viewer who has none.
+       */
+      return viewer != null;
+  }
 }
 
 /** A visibility value from a form, or the default if it is not one we know. */

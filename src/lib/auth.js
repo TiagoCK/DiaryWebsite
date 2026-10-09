@@ -135,6 +135,26 @@ export async function requireUser(returnTo) {
 }
 
 /**
+ * The viewer, who may be nobody.
+ *
+ * For pages a stranger may legitimately open: the shelf and the reader, now
+ * that a volume can be marked `public`. Returns null for "not signed in" and
+ * leaves it to canSee() to decide what that viewer may have.
+ *
+ * Why this is not just getCurrentUser(), which also returns user-or-null: the
+ * outage. requireUser() redirects to /paused when the backing store is
+ * unreachable, and a page that simply dropped it would instead sail past with a
+ * null viewer and throw an OutageError out of the first data read -- turning the
+ * paused page into a stack trace. This keeps that redirect and gives up only the
+ * sign-in one.
+ */
+export async function getViewer() {
+  const { user, outage } = await getAuthState();
+  if (outage) redirect(PAUSED_PATH);
+  return user;
+}
+
+/**
  * Require an admin. Readers get sent back to the diary, not to a login loop.
  *
  * No returnTo is passed. The middleware redirects signed-out visitors first and

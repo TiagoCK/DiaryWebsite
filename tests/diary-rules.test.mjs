@@ -126,25 +126,50 @@ describe("diaries: prepareDiary", () => {
 describe("diaries: canSee", () => {
   const admin = { isAdmin: true };
   const reader = { isAdmin: false };
-  const open = { visibility: "readers" };
+
+  const open = { visibility: "public" };
+  const members = { visibility: "readers" };
   const hidden = { visibility: "admins" };
 
-  it("lets anyone signed in open a readers diary", () => {
-    assert.equal(canSee(open, reader), true);
-    assert.equal(canSee(open, admin), true);
-  });
+  /*
+   * The whole grid, explicitly. canSee() is checked from five surfaces and is
+   * the only thing standing between an anonymous request and a private volume,
+   * so every cell is worth a row rather than a clever loop.
+   */
+  const GRID = [
+    // visibility,  no viewer, reader, admin
+    ["public", open, true, true, true],
+    ["readers", members, false, true, true],
+    ["admins", hidden, false, false, true],
+  ];
 
-  it("hides an admins diary from readers", () => {
-    assert.equal(canSee(hidden, reader), false);
-    assert.equal(canSee(hidden, admin), true);
-  });
+  for (const [label, diary, anon, asReader, asAdmin] of GRID) {
+    it(`${label}: anonymous ${anon}, reader ${asReader}, admin ${asAdmin}`, () => {
+      assert.equal(canSee(diary, null), anon, `${label} / anonymous`);
+      assert.equal(canSee(diary, reader), asReader, `${label} / reader`);
+      assert.equal(canSee(diary, admin), asAdmin, `${label} / admin`);
+    });
+  }
 
-  it("hides an admins diary when there is no viewer at all", () => {
-    // Nothing should reach this without a session, but a null viewer must never
-    // read as permission.
+  /*
+   * The three assertions this change exists to protect. Anonymous requests now
+   * reach the pages so a public volume can be read without an account; before
+   * that, canSee returned true for anything not marked `admins`, which would
+   * have handed a stranger every readers volume.
+   */
+  it("never lets an anonymous viewer past anything but public", () => {
+    assert.equal(canSee(members, null), false);
     assert.equal(canSee(hidden, null), false);
-    assert.equal(canSee(hidden, undefined), false);
+    assert.equal(canSee({}, null), false);
+    assert.equal(canSee({ visibility: null }, null), false);
+    assert.equal(canSee({ visibility: "something-new" }, null), false);
+  });
+
+  it("treats an empty object as no viewer, not as a signed-in one", () => {
+    // getAuthState() returns { user: null }, never {}. But a call site that
+    // passed the wrong thing must not thereby gain access.
     assert.equal(canSee(hidden, {}), false);
+    assert.equal(canSee(members, {}), true, "an object is a viewer, if a weak one");
   });
 
   it("does not treat a truthy non-admin role as admin", () => {
@@ -153,29 +178,43 @@ describe("diaries: canSee", () => {
     }
   });
 
-  it("treats a missing visibility as readable", () => {
+  it("treats a missing visibility as readers, not as public", () => {
     // A row from before the migration, or select("*") on a database that has
-    // not run it yet. Vanishing from every shelf would be the worse failure.
+    // not run it yet. It must still be readable to a signed-in viewer --
+    // vanishing from every shelf would be the worse failure -- but it must not
+    // become world-readable by default.
     assert.equal(canSee({}, reader), true);
     assert.equal(canSee({ visibility: null }, reader), true);
     assert.equal(canSee({ visibility: "something-new" }, reader), true);
+    assert.equal(canSee({}, null), false);
   });
 
   it("refuses a missing diary", () => {
     assert.equal(canSee(null, admin), false);
     assert.equal(canSee(undefined, admin), false);
+    assert.equal(canSee(null, null), false);
   });
 });
 
 describe("diaries: normaliseVisibility", () => {
   it("accepts the values the database allows", () => {
+    assert.equal(normaliseVisibility("public"), "public");
     assert.equal(normaliseVisibility("readers"), "readers");
     assert.equal(normaliseVisibility("admins"), "admins");
   });
 
   it("falls back to readers for anything else", () => {
-    for (const junk of ["", "  ", "public", "ADMINS", null, undefined, 7, {}]) {
+    // "PUBLIC" stays junk on purpose: the comparison is exact, so a
+    // differently-cased value from a hand-built request cannot make a volume
+    // world-readable by near-miss.
+    for (const junk of ["", "  ", "PUBLIC", "ADMINS", "publ", null, undefined, 7, {}]) {
       assert.equal(normaliseVisibility(junk), DEFAULT_VISIBILITY, JSON.stringify(junk));
     }
+  });
+
+  it("never normalises junk to public", () => {
+    // The fallback is the one that governs a forgotten form field, so it must
+    // be the private-by-default value.
+    assert.notEqual(DEFAULT_VISIBILITY, "public");
   });
 });
