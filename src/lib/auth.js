@@ -117,7 +117,7 @@ async function ensureProfile(user) {
  * store is unreachable, to the login page if there is simply no session.
  *
  * Called directly by every protected page and route rather than relying on the
- * middleware, which is a convenience redirect and not the security boundary.
+ * proxy, which is a convenience redirect and not the security boundary.
  *
  * The outage branch is checked first and deliberately does not fall through to
  * the login page. Sending someone there would be an invitation to type a
@@ -155,9 +155,37 @@ export async function getViewer() {
 }
 
 /**
+ * Run a data read, sending the viewer to /paused if the store is unreachable.
+ *
+ * getViewer() catches an outage the *auth* call noticed. That is not enough on
+ * a page a signed-out visitor can reach, because of an asymmetry worth stating:
+ * with no session cookie, supabase-js answers getUser() with
+ * AuthSessionMissingError and never touches the network -- so an unreachable
+ * project looks exactly like being signed out, and the first thing that
+ * actually discovers it is the data read further down.
+ *
+ * Before public volumes existed this could not happen: the proxy turned every
+ * anonymous request away, and a signed-in one always made the token-validating
+ * network call that surfaced the outage first. Letting anonymous requests
+ * through opened the gap, and without this they ended in a 500.
+ *
+ * Only OutageError is caught. notFound() and redirect() signal by throwing too,
+ * and those must keep propagating -- hence the rethrow rather than a bare
+ * catch.
+ */
+export async function orPaused(read) {
+  try {
+    return await read();
+  } catch (error) {
+    if (error instanceof OutageError) redirect(PAUSED_PATH);
+    throw error;
+  }
+}
+
+/**
  * Require an admin. Readers get sent back to the diary, not to a login loop.
  *
- * No returnTo is passed. The middleware redirects signed-out visitors first and
+ * No returnTo is passed. The proxy redirects signed-out visitors first and
  * already carries the real pathname in ?next=, so hardcoding one here only
  * managed to overwrite a correct deep link with "/admin".
  */

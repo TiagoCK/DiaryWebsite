@@ -374,6 +374,18 @@ code {
   border-color: var(--muted);
 }
 
+/*
+ * The one state worth seeing from across the room: a volume anyone on the
+ * internet can read. Deliberately the only badge with a fill rather than an
+ * outline -- "admins only" is the cautious setting and needs no alarm, this one
+ * is the consequential one.
+ */
+.badge--public {
+  color: var(--background);
+  background: var(--muted);
+  border-color: var(--muted);
+}
+
 .topbar__link {
   color: var(--foreground);
   text-decoration: none;
@@ -1934,6 +1946,31 @@ code {
   transform-origin: top left;
   max-width: none;
   user-select: none;
+}
+
+/* A select plus Save, since three values cannot be a toggle. */
+.adminshelf__visibility {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.adminshelf__visibility label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.adminshelf__visibility select {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--foreground);
 }
 
 .adminshelf__visibility button {

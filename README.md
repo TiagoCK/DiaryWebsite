@@ -1,16 +1,20 @@
-# My Diary
+# Bookshelf
 
-Reads a shelf of handwritten diary scans as a book — a real page-turn, two pages
-to a spread — and gives its owner the tools to run the archive: upload scans or
-whole PDFs, rotate and crop them, black out what should stay private, reorder
-pages, and search what has been transcribed.
+A shelf of scanned volumes, read as books — a real page-turn, two pages to a
+spread — with the tools to run the archive behind it: upload scans or whole
+PDFs, rotate and crop them, black out what should stay private, reorder pages,
+and search what has been transcribed.
+
+It started as one handwritten diary, which is still the volume it was built
+around. That is also why every volume carries a **visibility**: a notebook can
+be open to anyone, to signed-in readers, or to nobody but an admin.
 
 Next.js (App Router), plain JavaScript, Supabase for page rows, private image
 storage and auth. No test framework, no ORM, no UI library.
 
-**The content is private, so the app is not deployed publicly.** This repository
-is the code only: scans, the manifest and every credential are gitignored, and
-nothing in the history has ever contained diary content.
+**The scans are private and stay out of git.** This repository is the code
+only: images, the generated manifest and every credential are gitignored, and
+no commit in the history has ever contained a scan or a transcription.
 
 ## The problem it actually solves
 
@@ -87,9 +91,14 @@ runs it on Node 22 and 24 with no credentials at all.
 
 ## Signing in
 
-The diary is invite-only. Accounts exist **only** when you create them in
-Supabase → Authentication → Users, where you also set the password. The app has
-no sign-up form, no "create account" link, and no `signUp()` call anywhere.
+Only to read what is not `public`. A volume marked public needs no account and
+no session, which is the point of it; everything else does.
+
+Accounts are invite-only and exist **only** when you create them in Supabase →
+Authentication → Users, where you also set the password. The app has no sign-up
+form, no "create account" link, and no `signUp()` call anywhere — a public
+volume is read with no identity at all rather than with a throwaway one, so
+there is nothing for a visitor to create.
 
 **One dashboard setting is load-bearing:** Authentication → Sign In / Providers
 → Email → **"Allow new users to sign up" must be OFF**. The publishable key
@@ -99,6 +108,35 @@ ships to every browser, so while that toggle is on, anyone holding it can call
 No email is ever sent — no confirmations, no password resets — which keeps
 Supabase's rate-limited built-in SMTP out of the picture entirely. If you forget
 a password, reset it in the dashboard.
+
+### Who can open a volume
+
+Separate from roles, and checked separately. A role says what someone *is*; a
+volume's `visibility` says who it is *for*:
+
+| `visibility` | Who can open it |
+|---|---|
+| `public` | Anyone at all, with no account and no session |
+| `readers` (default) | Anyone signed in |
+| `admins` | Admins only — invisible on the shelf, and its images are refused |
+
+Set it when adding a volume, or change it any time from **Admin → the volume's
+"Who can open it"**. The default is `readers`, deliberately: nothing becomes
+world-readable because a form field went untouched.
+
+One rule decides all of it — `canSee()` in `src/lib/diary-rules.js` — because it
+is consulted from five places (the shelf, the reader, search, the admin list and
+the image route) and a copy of it that drifted would be a hole rather than an
+inconsistency. It is the most heavily tested function here: the whole grid of
+three visibilities against an anonymous, reader and admin viewer.
+
+`public` is **not** a database grant. RLS stays on with no policies and the
+server still reads with the secret key, filtering itself; a browser holding the
+publishable key sees nothing directly, exactly as before. What changed is which
+requests the server is willing to answer, not what the database will hand out.
+
+A refusal is a **404, not a 403**. Telling someone a volume exists but is not
+theirs is itself a disclosure.
 
 ### Roles
 
@@ -130,16 +168,25 @@ Every read goes through the Next.js server using the secret key, so the
 for both `pages` and `profiles`, which is what makes it safe for the browser to
 hold a Supabase client for the login form — the publishable key can't read a row.
 
-Two things in the code are deliberate and easy to undo by accident:
+Three things in the code are deliberate and easy to undo by accident:
 
 - **`getUser()`, never `getSession()`, on the server.** `getSession()` decodes
   the cookie and trusts it; `getUser()` revalidates against the auth server.
-- **The middleware is not the security boundary.** It refreshes sessions and
+- **`src/proxy.js` is not the security boundary.** It refreshes sessions and
   redirects politely. Every protected surface re-checks for itself —
   `src/app/page.js`, `src/app/admin/page.js`, the server action in
   `src/app/admin/actions.js` (server actions are publicly reachable endpoints,
   so guarding the form's page guards nothing), and above all
-  `src/app/api/scan/[pageId]/route.js`, which serves the images.
+  `src/app/api/scan/[diaryId]/[pageId]/route.js`, which serves the images.
+
+  That matters more since public volumes arrived: the proxy now lets anonymous
+  requests through rather than bouncing them to `/login`, so what used to be a
+  belt-and-braces re-check is the only check.
+- **A signed-out visitor and an unreachable project look identical to the auth
+  call.** With no session cookie, supabase-js answers `getUser()` with
+  `AuthSessionMissingError` and never touches the network — so an outage is
+  invisible until the first data read. `orPaused()` in `src/lib/auth.js` is what
+  turns that read's failure into the paused page instead of a 500.
 
 
 ## Where the pages come from

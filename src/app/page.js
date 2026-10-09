@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import { requireUser } from "@/lib/auth";
+import { getViewer, orPaused } from "@/lib/auth";
 import { getDiaries } from "@/lib/diaries";
 import { getPages } from "@/lib/pages";
 import { totalPages } from "@/lib/views";
@@ -16,21 +16,34 @@ export const dynamic = "force-dynamic";
  * would have been a second-class citizen at a different shape of URL.
  */
 export default async function Shelf() {
-  const user = await requireUser();
-  const diaries = await getDiaries(user);
+  // May be nobody. getDiaries() filters through canSee(), so an anonymous
+  // visitor is handed the `public` volumes and nothing else.
+  const user = await getViewer();
+  const diaries = await orPaused(() => getDiaries(user));
 
   if (diaries.length === 0) {
     return (
       <section className="shelf">
-        <h2>No diaries yet</h2>
+        <h2>Nothing on the shelf yet</h2>
         <p className="admin__note">
-          {user.isAdmin ? (
+          {/*
+            Three audiences, and the third is new: a visitor with no account at
+            all, who reaches this when no volume is marked `public`. Telling
+            them nothing is published would be true but dead-ended, so they get
+            the way in. `user?.` because this page no longer guarantees a user.
+          */}
+          {user?.isAdmin ? (
             <>
               Create one from the <Link href="/admin">admin section</Link>, then
               upload its scans.
             </>
-          ) : (
+          ) : user ? (
             "Nothing has been published here yet."
+          ) : (
+            <>
+              Nothing is public here yet. <Link href="/login">Sign in</Link> if
+              you have an account.
+            </>
           )}
         </p>
       </section>
@@ -44,11 +57,13 @@ export default async function Shelf() {
   // the reader does -- same mapping, same image URLs, same contentId -- and at
   // a shelf's worth of books the extra round trips cost less than a second
   // mapping that could disagree with the first.
-  const shelf = await Promise.all(
-    diaries.map(async (diary) => {
-      const pages = await getPages(diary.id);
-      return { diary, cover: pages[0] ?? null, pages: totalPages(pages) };
-    })
+  const shelf = await orPaused(() =>
+    Promise.all(
+      diaries.map(async (diary) => {
+        const pages = await getPages(diary.id);
+        return { diary, cover: pages[0] ?? null, pages: totalPages(pages) };
+      })
+    )
   );
 
   return (

@@ -21,7 +21,7 @@ export const dynamic = "force-dynamic";
  * avoid.
  */
 export default async function SearchPage({ searchParams }) {
-  // Checked here, not just in the middleware -- see src/middleware.js.
+  // Checked here, not just in the proxy -- see src/proxy.js.
   const user = await requireUser("/search");
 
   const params = await searchParams;

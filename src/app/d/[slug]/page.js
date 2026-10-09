@@ -1,5 +1,5 @@
 import BookViewer from "@/components/BookViewer";
-import { requireUser } from "@/lib/auth";
+import { getViewer, orPaused } from "@/lib/auth";
 import { requireDiary } from "@/lib/diaries";
 import { getPages } from "@/lib/pages";
 import { buildViews, frameAspect, initialViewIndex, totalPages } from "@/lib/views";
@@ -15,24 +15,27 @@ export const dynamic = "force-dynamic";
 
 export async function generateMetadata({ params }) {
   // Gated like the page itself. A browser tab title is a small leak, but a
-  // hidden diary's name reaching someone who may not open it is still a leak --
-  // and this runs even when the page below is about to 404.
-  const user = await requireUser();
+  // hidden volume's name reaching someone who may not open it is still a leak
+  // -- and this runs even when the page below is about to 404.
+  const user = await getViewer();
   const { slug } = await params;
-  const diary = await requireDiary(slug, user);
-  return { title: `${diary.title} — My Diary` };
+  const diary = await orPaused(() => requireDiary(slug, user));
+  return { title: `${diary.title} — Bookshelf` };
 }
 
 export default async function DiaryPage({ params, searchParams }) {
-  // Checked here, not just in the middleware -- see src/middleware.js.
-  const user = await requireUser();
+  // Checked here, not just in the proxy -- see src/proxy.js. getViewer()
+  // rather than requireUser(): the viewer may be nobody, and requireDiary()
+  // below 404s unless canSee() says this volume is theirs. A `public` volume is
+  // readable with no account; everything else still is not.
+  const user = await getViewer();
 
   // A slug from the URL, so it is resolved before it can become a query.
   const { slug } = await params;
-  const diary = await requireDiary(slug, user);
+  const diary = await orPaused(() => requireDiary(slug, user));
 
   // Metadata only. No image bytes are read here.
-  const pages = await getPages(diary.id);
+  const pages = await orPaused(() => getPages(diary.id));
   // An empty diary is left to the viewer, which renders a "no pages yet"
   // message with a route back to the uploader. A 404 here would be worse: it
   // would hide a diary the admin is in the middle of filling.

@@ -6,7 +6,7 @@ import { BUCKET, getSupabase } from "@/lib/supabase";
  *
  * This is the ONLY route that can reach the originals/ prefix -- /api/scan has
  * no code path to it at all. Admin-gated here rather than relying on the
- * middleware, for the same reason as everywhere else in this app.
+ * proxy, for the same reason as everywhere else in this app.
  *
  * It matters more once censor bars exist: originals will hold uncensored
  * content until a redaction re-baselines them, so this endpoint is the boundary
