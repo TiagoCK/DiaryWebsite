@@ -56,6 +56,9 @@ export default async function AdminIndex() {
                 {diary.visibility === "admins" && (
                   <span className="badge badge--admin">admins only</span>
                 )}
+                {diary.visibility === "public" && (
+                  <span className="badge badge--public">public</span>
+                )}
               </span>
             </div>
 
@@ -69,18 +72,22 @@ export default async function AdminIndex() {
                   would strand their storage objects, which SQL cannot reach --
                   the foreign key refuses it too, but not offering the button is
                   a better answer than explaining a constraint violation. */}
-              {/* One button, not a dropdown: with two values a toggle that
-                  states what it will do is clearer than a select plus Save. */}
+              {/* This was one button that stated what it would do, which is
+                  clearer than a select -- but only while there were two values.
+                  With three it would have to guess which one you meant, so it
+                  is a select plus Save after all. The current value is the
+                  selected option, so the control also reports the state. */}
               <ActionForm action={setDiaryVisibility} className="adminshelf__visibility">
                 <input type="hidden" name="diaryId" value={diary.id} />
-                <input
-                  type="hidden"
-                  name="visibility"
-                  value={diary.visibility === "admins" ? "readers" : "admins"}
-                />
-                <button type="submit">
-                  {diary.visibility === "admins" ? "Make visible to readers" : "Make admins only"}
-                </button>
+                <label>
+                  Who can open it
+                  <select name="visibility" defaultValue={diary.visibility}>
+                    <option value="public">Anyone, no account</option>
+                    <option value="readers">Anyone signed in</option>
+                    <option value="admins">Admins only</option>
+                  </select>
+                </label>
+                <button type="submit">Save</button>
               </ActionForm>
 
               {rows === 0 && (
@@ -134,19 +141,25 @@ export default async function AdminIndex() {
             autoComplete="off"
           />
 
-          <span className="newdiary__label">Visible to</span>
+          <span className="newdiary__label">Who can open it</span>
           <span className="newdiary__radios">
+            {/* "Anyone signed in" stays the default. A new volume should never
+                become world-readable because nobody touched this. */}
             <label>
               <input type="radio" name="visibility" value="readers" defaultChecked />
-              Everyone signed in
+              Anyone signed in
             </label>
             <label>
               <input type="radio" name="visibility" value="admins" />
               Admins only
             </label>
+            <label>
+              <input type="radio" name="visibility" value="public" />
+              Anyone, no account
+            </label>
           </span>
 
-          <button type="submit">Create diary</button>
+          <button type="submit">Add volume</button>
         </ActionForm>
       </section>
     </>

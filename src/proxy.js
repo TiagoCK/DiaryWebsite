@@ -4,7 +4,11 @@ import { createServerClient } from "@supabase/ssr";
 import { isOutage, PAUSED_PATH } from "@/lib/outage.js";
 
 /**
- * Refreshes the Supabase session cookie and sends signed-out visitors to /login.
+ * Refreshes the Supabase session cookie, and redirects where it is useful to.
+ *
+ * Named `proxy` because `middleware` is deprecated in Next 16 -- same
+ * behaviour, different filename and export. One consequence worth knowing:
+ * `proxy` runs on the nodejs runtime, not edge, and that is not configurable.
  *
  * This is NOT the security boundary. It is a session refresher and a friendly
  * redirect. Next.js has had a middleware-bypass vulnerability before
@@ -12,17 +16,41 @@ import { isOutage, PAUSED_PATH } from "@/lib/outage.js";
  * patched, but a gate with a single layer is the wrong shape regardless.
  *
  * Every protected surface re-checks for itself:
- *   src/app/page.js                    requireUser()
- *   src/app/api/scan/[pageId]/route.js requireUser()   <- serves the images
- *   src/app/admin/page.js              requireAdmin()
- *   src/app/admin/actions.js           requireAdmin()
+ *   src/app/page.js                              getViewer()  <- may be nobody
+ *   src/app/d/[slug]/page.js                     getViewer() + requireDiary()
+ *   src/app/api/scan/[diaryId]/[pageId]/route.js canSee()     <- serves the images
+ *   src/app/search/page.js                       requireUser()
+ *   src/app/admin/page.js                        requireAdmin()
+ *   src/app/admin/actions.js                     requireAdmin()
  */
 
-// PAUSED_PATH is public because it is what an unreachable project redirects to:
-// if it required a session it could only ever redirect to itself.
-const PUBLIC_PATHS = ["/login", "/auth", PAUSED_PATH];
+/*
+ * Paths a signed-out visitor is still bounced from.
+ *
+ * This used to be the inverse -- an allowlist of public paths, with everything
+ * else redirected to /login. It had to flip, because a volume marked `public`
+ * must be readable with no session at all: the shelf, the reader and the image
+ * route now serve a viewer who may be nobody, and canSee() decides what such a
+ * viewer gets.
+ *
+ * Flipping an allowlist into a denylist is normally how things end up
+ * accidentally open, and it is tolerable here for one specific reason: this was
+ * never the gate. Every surface listed in the comment above re-checks for
+ * itself, so a new route that forgets to appear here is still protected by its
+ * own requireAdmin() or requireUser() -- which is the pattern every route in
+ * this app already follows. Adding a route without its own check would be the
+ * bug, and it would be a bug with or without this list.
+ */
+const NEEDS_SESSION = ["/admin", "/api/admin", "/search"];
 
-export async function middleware(request) {
+/*
+ * Paths that must not be redirected during an outage, or they would redirect to
+ * themselves. /paused is the destination; /login and /auth are how someone gets
+ * back in once the project returns.
+ */
+const OUTAGE_SAFE_PATHS = ["/login", "/auth", PAUSED_PATH];
+
+export async function proxy(request) {
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -53,7 +81,8 @@ export async function middleware(request) {
   } = await supabase.auth.getUser();
 
   const { pathname } = request.nextUrl;
-  const isPublic = PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+  const matches = (paths) =>
+    paths.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 
   /*
    * An unreachable Supabase answers in exactly the shape of a signed-out
@@ -67,7 +96,7 @@ export async function middleware(request) {
    */
   if (error && isOutage(error)) {
     if (pathname.startsWith("/api/")) return unavailable();
-    if (isPublic) return response;
+    if (matches(OUTAGE_SAFE_PATHS)) return response;
 
     const url = request.nextUrl.clone();
     url.pathname = PAUSED_PATH;
@@ -75,7 +104,7 @@ export async function middleware(request) {
     return NextResponse.redirect(url);
   }
 
-  if (!user && !isPublic) {
+  if (!user && matches(NEEDS_SESSION)) {
     // /api is fetched by <img> and fetch(), never navigated to. Redirecting
     // those to the HTML login page hands an <img> a document to decode, so it
     // fails as a broken image with no clue why -- and it silently overrode the

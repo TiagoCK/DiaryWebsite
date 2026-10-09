@@ -26,7 +26,7 @@ export async function createAuthClient() {
               cookieStore.set(name, value, options);
             }
           } catch {
-            // Server Components cannot set cookies. Harmless: the middleware
+            // Server Components cannot set cookies. Harmless: the proxy
             // refreshes the session on every request, so the write that matters
             // has already happened there.
           }

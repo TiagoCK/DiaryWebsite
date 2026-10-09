@@ -20,10 +20,12 @@
 /**
  * Where an unreachable backing store sends a navigation.
  *
- * Lives here rather than in auth.js because the middleware needs it too, and
- * the middleware runs in the Edge runtime -- importing auth.js there would drag
- * in next/headers and the Supabase server client with it. This module is pure,
- * so it is safe from anywhere.
+ * Lives here rather than in auth.js because src/proxy.js needs it too, and
+ * importing auth.js there would drag in next/headers and the Supabase server
+ * client for the sake of one string. (Under the old `middleware` convention it
+ * was a hard requirement, since that ran on the Edge runtime; `proxy` runs on
+ * nodejs, so it is now a matter of not pulling in a module graph rather than of
+ * what the runtime permits.) This module is pure, so it is safe from anywhere.
  */
 export const PAUSED_PATH = "/paused";
 

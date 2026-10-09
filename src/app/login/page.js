@@ -60,8 +60,10 @@ function LoginForm() {
 
   return (
     <form className="login" onSubmit={onSubmit}>
-      <h1>My Diary</h1>
-      <p className="login__note">This diary is private. Sign in to continue.</p>
+      <h1>Bookshelf</h1>
+      <p className="login__note">
+        Sign in to read the volumes that are not public.
+      </p>
 
       <label htmlFor="email">Email</label>
       <input

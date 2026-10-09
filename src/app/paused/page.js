@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 export const metadata = {
-  title: "Unavailable - My Diary",
+  title: "Unavailable - Bookshelf",
 };
 
 export const dynamic = "force-dynamic";

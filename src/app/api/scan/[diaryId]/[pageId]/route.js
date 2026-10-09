@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { canSee } from "@/lib/diary-rules";
+import { canSee, DEFAULT_VISIBILITY } from "@/lib/diary-rules";
 import { DIARY_SOURCE, findLocalPage } from "@/lib/pages";
 import { getAuthState } from "@/lib/auth";
 import { isOutage } from "@/lib/outage.js";
@@ -19,22 +19,25 @@ const SCANS_DIR = path.join(process.cwd(), "images");
  *
  * Either way the caller just requests /api/scan/<pageId>.
  *
- * This route serves the actual diary images, which makes it the most important
- * thing to protect. It checks the session itself rather than trusting the
- * middleware: if the middleware were ever bypassed, this is the endpoint that
- * would hand over the whole diary.
+ * This route serves the actual scan images, which makes it the most important
+ * thing to protect. It decides for itself rather than trusting the proxy: if the
+ * proxy were ever bypassed, this is the endpoint that would hand over everything.
+ *
+ * It no longer requires a session, because a volume marked `public` must be
+ * readable without one. What it requires instead is canSee(), against the
+ * visibility that arrives with the row -- so an anonymous caller gets a public
+ * volume's images and a 404 for anything else. The permission question moved; it
+ * did not go away.
  */
 export async function GET(request, { params }) {
-  // 401 rather than a redirect -- the caller is an <img>, not a browser
-  // navigation, and a redirect to an HTML login page would just decode as a
-  // broken image.
+  // The viewer may be nobody, and that is no longer a refusal on its own --
+  // canSee() decides further down, once the row says how visible the volume is.
   //
-  // An unreachable project is a separate answer. It is not that this caller may
-  // not have the image; it is that nobody can be identified and no image can be
-  // fetched, which is a 503 and not a 401.
+  // An unreachable project is still its own answer. It is not that this caller
+  // may not have the image; it is that nobody can be identified and no image can
+  // be fetched, which is a 503 and not a 404.
   const { user, outage } = await getAuthState();
   if (outage) return unavailable();
-  if (!user) return new Response("Unauthorized", { status: 401 });
 
   const { diaryId: rawDiary, pageId: raw } = await params;
 
@@ -45,9 +48,22 @@ export async function GET(request, { params }) {
   const pageId = Number(raw);
   const diaryId = Number(rawDiary);
 
-  return DIARY_SOURCE === "local"
-    ? serveFromDisk(pageId)
-    : serveFromSupabase(diaryId, pageId, user);
+  if (DIARY_SOURCE === "local") {
+    /*
+     * Local mode reads the manifest, which has no notion of volumes or of
+     * visibility -- there is no row here to ask canSee() about, and this branch
+     * never reaches the canSee() in serveFromSupabase().
+     *
+     * That made it a hole the moment the session check above was removed: every
+     * scan on disk would have been readable by anyone. The single volume local
+     * mode serves is declared as DEFAULT_VISIBILITY in src/lib/diaries.js, so
+     * apply exactly that rule and let it follow if the default ever changes.
+     */
+    if (!canSee({ visibility: DEFAULT_VISIBILITY }, user)) return notFound();
+    return serveFromDisk(pageId);
+  }
+
+  return serveFromSupabase(diaryId, pageId, user);
 }
 
 async function serveFromDisk(pageId) {
@@ -96,8 +112,14 @@ async function serveFromSupabase(diaryId, pageId, viewer) {
   }
   if (!row) return notFound();
 
-  // 404 rather than 403, matching /d/<slug>: a refusal that distinguishes
-  // "no such diary" from "not yours" tells a reader which ids are worth trying.
+  /*
+   * 404 rather than 403, matching /d/<slug>: a refusal that distinguishes "no
+   * such volume" from "not yours" tells a caller which ids are worth trying.
+   *
+   * This is now the only thing standing between an anonymous request and a
+   * private image, since the session check above went away. `viewer` is null for
+   * such a request, and canSee() returns true only for `public`.
+   */
   if (!canSee(row.diaries, viewer)) return notFound();
 
   const { data: signed, error: signError } = await supabase.storage
