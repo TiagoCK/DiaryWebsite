@@ -221,6 +221,75 @@ code {
   );
 }
 
+/* ---------- the scrolling column ---------- */
+
+/*
+ * One page at a time, scrolling.
+ *
+ * Its own scrollbar rather than the window's, which is the whole reason this is
+ * a sized container: the controls and the search box sit below it, and a reader
+ * using them should not have to scroll back up past an entire volume to reach
+ * them.
+ *
+ * scrollbar-gutter keeps the column from shifting sideways when the scrollbar
+ * appears, and overscroll-behavior stops a flick at the end of the volume from
+ * scrolling the page behind it.
+ */
+.column {
+  list-style: none;
+  margin: 0;
+  padding: 0.75rem;
+  height: min(78vh, 900px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  background: var(--paper);
+  border-radius: 3px;
+  box-shadow: 0 10px 30px -12px var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/*
+ * aspect-ratio arrives per item from the style attribute -- a whole page's own
+ * ratio, or half a spread's -- which is what reserves the right height before
+ * any image loads and makes the scrollbar honest from the first paint.
+ *
+ * flex: 0 0 auto so a short page is not stretched to share the column evenly;
+ * each one keeps the shape it really is.
+ */
+.column__item {
+  position: relative;
+  flex: 0 0 auto;
+  background: var(--paper);
+
+  /*
+   * Sized by HEIGHT, not width, which is the whole point of the mode: one page
+   * should fill the space. Sizing by width instead -- the obvious reading of
+   * "give each item its aspect ratio" -- makes a portrait page about 2.3 times
+   * the column's height, so a reader sees a third of a page and has to scroll
+   * three times to finish one.
+   *
+   * height: 100% resolves against the column's definite height, aspect-ratio
+   * then derives the width, and margin-inline centres the result -- a portrait
+   * page is narrower than the column, and should sit in the middle of it rather
+   * than against one edge.
+   *
+   * max-width is the other half of the letterbox: a page wider than it is tall
+   * would otherwise overflow sideways, so width wins and the height follows it
+   * down.
+   */
+  height: 100%;
+  max-width: 100%;
+  margin-inline: auto;
+}
+
+.column__page {
+  position: absolute;
+  inset: 0;
+}
+
 /* ---------- controls ---------- */
 
 .controls {
@@ -1853,9 +1922,20 @@ code {
   outline-offset: -2px;
 }
 
-.controls__zoom {
+.controls__zoom,
+.controls__mode {
   font-size: 0.85rem !important;
   padding: 0.3rem 0.75rem !important;
+}
+
+/*
+ * The toggle reports its state, rather than only naming where it goes. The
+ * label already says which view you would get; this says which one you are in,
+ * for anyone who cannot see that from the page itself.
+ */
+.controls__mode[aria-pressed="true"] {
+  background: var(--paper);
+  border-color: var(--muted);
 }
 
 .zoom {

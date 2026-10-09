@@ -72,6 +72,49 @@ export function halfOf(view, side) {
 }
 
 /**
+ * The page number a half shows.
+ *
+ * One rule covers every case, because `clip` is set only for a spread: a
+ * clipped right half is the second of the two numbers that scan spans, and
+ * anything else -- a whole single page, or either side of a paired view -- is
+ * its own scan's first number. A paired view works out because its two halves
+ * are two different scans, each carrying its own pageId.
+ */
+export function pageNumberOfHalf(half) {
+  if (!half) return null;
+  return half.clip === "right" ? half.page.pageId + 1 : half.page.pageId;
+}
+
+/**
+ * Every physical page in reading order, as halves.
+ *
+ * The unit the scrolling mode scrolls: one item per page, rather than one per
+ * frame. Deliberately the same { page, clip } shape halfOf() returns, with a
+ * number added, so one <Half> component renders a scroll item and a book slot
+ * alike -- the clipping CSS lays the image out against its own container, so
+ * the book frame was never special.
+ *
+ * A spread becomes two items, a single page becomes one, and the blank facing
+ * page of a trailing single becomes none: there is nothing there to scroll to.
+ *
+ * It asks halfOf() rather than reading the pages itself, which means it
+ * inherits that function's limits instead of improving on them. A scan claiming
+ * more than two pages already renders as two halves in the book, and so does it
+ * here -- two modes that are imperfect in the same way are easier to reason
+ * about than two that disagree.
+ */
+export function buildHalves(views) {
+  const halves = [];
+  for (const view of views) {
+    for (const side of ["left", "right"]) {
+      const half = halfOf(view, side);
+      if (half) halves.push({ ...half, pageNumber: pageNumberOfHalf(half) });
+    }
+  }
+  return halves;
+}
+
+/**
  * Width-to-height ratio for the fixed book frame: the widest view, so every
  * scan letterboxes inside one frame that never changes size between flips.
  */

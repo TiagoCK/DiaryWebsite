@@ -4,7 +4,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import HighlightedLine from "@/components/HighlightedLine";
 import PageZoom from "@/components/PageZoom";
 import { searchPages } from "@/lib/search";
-import { halfOf, initialViewIndex, viewIndexForPage } from "@/lib/views";
+import { buildHalves, halfOf, initialViewIndex, viewIndexForPage } from "@/lib/views";
 
 const FLIP_MS = 600;
 
@@ -28,15 +28,41 @@ function readRemembered(key) {
 }
 
 /**
+ * Book or scroll, and where that choice is kept.
+ *
+ * localStorage, not sessionStorage, and one key for every volume: how someone
+ * likes to read is a preference about them, not a position in a particular
+ * book. Picking the scrolling column once should still be the choice next week,
+ * and in the next volume.
+ *
+ * Same failure handling as readRemembered() -- a private window throws on
+ * access rather than returning nothing -- and an unrecognised stored value
+ * falls back to the book rather than rendering a mode that does not exist.
+ */
+const MODE_KEY = "bookshelf:view-mode";
+const MODES = ["book", "scroll"];
+const DEFAULT_MODE = "book";
+
+function readMode() {
+  if (typeof window === "undefined") return DEFAULT_MODE;
+  try {
+    const stored = window.localStorage.getItem(MODE_KEY);
+    return MODES.includes(stored) ? stored : DEFAULT_MODE;
+  } catch {
+    return DEFAULT_MODE;
+  }
+}
+
+/**
  * A slot in the open book that opens the zoom when clicked.
  *
  * A button rather than a div with a handler, so it is reachable by keyboard and
  * announced as something that does a thing. A blank facing page is left inert.
  */
-function ZoomableSlot({ side, half, onOpen, busy }) {
+function ZoomableSlot({ className, half, onOpen, busy, lazy = false, style }) {
   if (!half) {
     return (
-      <div className={`slot slot--${side}`}>
+      <div className={className} style={style}>
         <Half half={half} />
       </div>
     );
@@ -45,7 +71,8 @@ function ZoomableSlot({ side, half, onOpen, busy }) {
   return (
     <button
       type="button"
-      className={`slot slot--${side} slot--zoomable`}
+      className={`${className} slot--zoomable`}
+      style={style}
       onClick={() => onOpen(half.page)}
       disabled={busy}
       aria-label={
@@ -54,13 +81,13 @@ function ZoomableSlot({ side, half, onOpen, busy }) {
           : `Enlarge pages ${half.page.pageId}–${half.page.pageId + half.page.pageCount - 1}`
       }
     >
-      <Half half={half} />
+      <Half half={half} lazy={lazy} />
     </button>
   );
 }
 
 /** One half of the open book: half a spread, a whole single page, or blank. */
-function Half({ half }) {
+function Half({ half, lazy = false }) {
   if (!half) return <div className="half half--blank" aria-hidden="true" />;
 
   const { page, clip } = half;
@@ -69,6 +96,14 @@ function Half({ half }) {
       {/* Plain <img>: the clipping relies on absolute positioning, and browsers
           apply these files' EXIF rotation natively. width/height are the
           display dimensions, so the box is reserved before the bytes land. */}
+      {/*
+        lazy is opt-in rather than always on, because the two modes want
+        opposite things. The book renders one view and prefetches its
+        neighbours, so its images must start immediately. The column renders
+        every page at once, and each one costs two requests -- /api/scan is a
+        redirect to a signed URL -- so loading them all on open would fire the
+        whole volume at a reader who may scroll three pages.
+      */}
       <img
         src={page.src}
         width={page.width}
@@ -76,6 +111,7 @@ function Half({ half }) {
         alt=""
         draggable="false"
         decoding="async"
+        loading={lazy ? "lazy" : undefined}
       />
     </div>
   );
@@ -101,6 +137,20 @@ export default function BookViewer({
   const [jumpError, setJumpError] = useState("");
   const [query, setQuery] = useState("");
 
+  /*
+   * Book or scrolling column.
+   *
+   * Starts at the default on both sides and is corrected after mount, for the
+   * same reason the remembered position is: this decides what gets rendered, so
+   * reading storage during render would have the server and the client disagree
+   * about what they produced.
+   */
+  const [mode, setMode] = useState(DEFAULT_MODE);
+
+  // The top-most page visible in the column, tracked while scrolling. Null in
+  // book mode and until the first observation lands.
+  const [scrollPage, setScrollPage] = useState(null);
+
   // The scan being examined full-window, or null. Held here rather than in the
   // slots so Escape, the controls and a page turn all speak to one thing.
   const [zoomed, setZoomed] = useState(null);
@@ -110,8 +160,23 @@ export default function BookViewer({
   // below rather than introducing a second way to skip the animation.
   const skipAnimation = !animate || reducedMotion;
 
+  /*
+   * The page the reader is on, whichever mode they are in.
+   *
+   * This is the single idea both modes report into and that everything else --
+   * the counter, the remembered position, ?page=, the mode toggle -- reads. The
+   * book knows it from its frame; the column from what is scrolled into view.
+   * Keeping it one value is what makes switching modes a lookup rather than a
+   * translation layer.
+   */
+  const bookPageNumber = views[index]?.pages[0].pageId ?? null;
+  const currentPageNumber =
+    mode === "scroll" ? (scrollPage ?? bookPageNumber) : bookPageNumber;
+
   // Mirrors `flip` so callbacks can read it without going stale.
   const flipRef = useRef(null);
+  const columnRef = useRef(null);
+  const visibleRef = useRef(new Set());
   const leafRef = useRef(null);
   const timerRef = useRef(null);
   const jumpId = useId();
@@ -120,6 +185,10 @@ export default function BookViewer({
   // Results are per PAGE, not per view: a paired view holds two single pages
   // with a first line each, and saying which one matched is the useful part.
   const allPages = useMemo(() => views.flatMap((view) => view.pages), [views]);
+
+  // One item per physical page. Only used by the column, but cheap and stable,
+  // so it is not worth branching the memo on mode.
+  const halves = useMemo(() => buildHalves(views), [views]);
   const matches = useMemo(() => searchPages(allPages, query), [allPages, query]);
 
   useEffect(() => {
@@ -184,6 +253,98 @@ export default function BookViewer({
   }, []);
 
   /*
+   * Apply the stored mode before the first paint.
+   *
+   * Same shape and same reason as the position restore above: this decides what
+   * is rendered, so it cannot be resolved during render without the server and
+   * the client disagreeing. One extra render, no hydration mismatch.
+   */
+  useLayoutEffect(() => {
+    const stored = readMode();
+    // The cascading render the linter warns about is the mechanism here, as it
+    // is for the leaf below: the server has already rendered the default, and
+    // correcting it before paint is precisely what avoids both a hydration
+    // mismatch and a visible flash of the wrong mode. Resolving it during
+    // render is the thing that cannot work.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (stored !== DEFAULT_MODE) setMode(stored);
+    // Mount only. Afterwards the toggle is the only thing that changes it.
+  }, []);
+
+  /*
+   * Which page the column is showing.
+   *
+   * An observer rather than a scroll handler: it reports only when something
+   * crosses the edge, off the main thread, instead of recomputing on every
+   * scroll event.
+   *
+   * The visible set is kept in a ref and the answer taken from all of it,
+   * because a callback reports only what CHANGED. Reading the top-most page out
+   * of `entries` alone would jump to whichever page happened to cross the
+   * boundary, not the one being read.
+   */
+  useEffect(() => {
+    if (mode !== "scroll") return;
+    const root = columnRef.current;
+    if (!root) return;
+
+    visibleRef.current = new Set();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const number = Number(entry.target.dataset.pageNumber);
+          if (!Number.isInteger(number)) continue;
+          if (entry.isIntersecting) visibleRef.current.add(number);
+          else visibleRef.current.delete(number);
+        }
+        if (visibleRef.current.size > 0) {
+          setScrollPage(Math.min(...visibleRef.current));
+        }
+      },
+      { root, threshold: 0 }
+    );
+
+    for (const el of root.querySelectorAll("[data-page-number]")) observer.observe(el);
+    return () => observer.disconnect();
+  }, [mode, halves]);
+
+  /*
+   * Opening the column lands on the page the reader was already on.
+   *
+   * bookPageNumber, not currentPageNumber: at this moment scrollPage is still
+   * null, so they are the same value, and depending on the derived one would
+   * re-run this as the reader scrolls and drag them back to where they started.
+   */
+  const columnOpenedRef = useRef(false);
+  useLayoutEffect(() => {
+    if (mode !== "scroll") return;
+    const root = columnRef.current;
+    if (!root) return;
+
+    /*
+     * Which page to land on depends on how the column got here.
+     *
+     * On a toggle, it is where the book was. On the first open of a session --
+     * the mode was restored from the preference, not chosen -- it is the exact
+     * page that was stored, which can be finer than the book can express: a
+     * frame reports its first page, so restoring through initialViewIndex alone
+     * turns "I was on page 4" into page 3, the facing half of the same spread.
+     * The column stores exact numbers, so it should honour them.
+     */
+    const remembered = Number(rememberedRef.current);
+    const exact =
+      !columnOpenedRef.current && halves.some((half) => half.pageNumber === remembered)
+        ? remembered
+        : bookPageNumber;
+    columnOpenedRef.current = true;
+
+    if (exact == null) return;
+    const el = root.querySelector(`[data-page-number="${exact}"]`);
+    if (el) el.scrollIntoView({ block: "start", behavior: "auto" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
+  /*
    * Record the position, and keep the address bar honest about it.
    *
    * The page NUMBER is stored rather than the frame index, because an index
@@ -198,10 +359,11 @@ export default function BookViewer({
     // that first instant does not lose the position it was about to reopen.
     if (!rememberKey || !restoredRef.current) return;
 
-    const view = views[index];
-    if (!view) return;
+    // currentPageNumber rather than the frame, so scrolling the column records
+    // the position exactly as turning a leaf does.
+    const pageNumber = currentPageNumber;
+    if (pageNumber == null) return;
 
-    const pageNumber = view.pages[0].pageId;
     try {
       window.sessionStorage.setItem(rememberKey, String(pageNumber));
     } catch {
@@ -213,7 +375,7 @@ export default function BookViewer({
       url.searchParams.set("page", String(pageNumber));
       window.history.replaceState(null, "", url);
     }
-  }, [index, views, rememberKey]);
+  }, [currentPageNumber, rememberKey]);
 
   const settle = useCallback(() => {
     const active = flipRef.current;
@@ -258,6 +420,71 @@ export default function BookViewer({
     (dir) => goToIndex(dir === "next" ? index + 1 : index - 1),
     [goToIndex, index]
   );
+
+  /** Scroll the column by one page. What Prev/Next mean when there is no leaf. */
+  const scrollByPage = useCallback(
+    (dir) => {
+      const root = columnRef.current;
+      if (root == null || currentPageNumber == null) return;
+
+      const at = halves.findIndex((half) => half.pageNumber === currentPageNumber);
+      const target = halves[at + (dir === "next" ? 1 : -1)];
+      if (!target) return;
+
+      const el = root.querySelector(`[data-page-number="${target.pageNumber}"]`);
+      // Instant, not smooth: the reader asked for a page, and a 300ms glide
+      // fights a second press. Honours reduced motion for free.
+      if (el) el.scrollIntoView({ block: "start", behavior: "auto" });
+    },
+    [halves, currentPageNumber]
+  );
+
+  /**
+   * Go to a page number, in whichever mode is showing.
+   *
+   * The jump field, the search hits and the mode toggle all want this, and all
+   * of them think in page numbers -- so the branch lives here once rather than
+   * at each call site.
+   */
+  const goToPage = useCallback(
+    (pageNumber) => {
+      if (mode === "scroll") {
+        const el = columnRef.current?.querySelector(
+          `[data-page-number="${pageNumber}"]`
+        );
+        if (el) el.scrollIntoView({ block: "start", behavior: "auto" });
+        return;
+      }
+      const target = viewIndexForPage(views, pageNumber);
+      if (target >= 0) goToIndex(target);
+    },
+    [mode, views, goToIndex]
+  );
+
+  /*
+   * Swap modes without losing the place.
+   *
+   * Both modes speak page numbers, so this is a lookup rather than a
+   * translation: into the book, resolve the number to its frame; into the
+   * column, the effect above scrolls to it. The preference is written here
+   * rather than in an effect, because it should record a deliberate choice and
+   * not the mode a restore happened to apply.
+   */
+  const toggleMode = useCallback(() => {
+    const next = mode === "book" ? "scroll" : "book";
+
+    if (next === "book" && currentPageNumber != null) {
+      const target = viewIndexForPage(views, currentPageNumber);
+      if (target >= 0) setIndex(target);
+    }
+
+    setMode(next);
+    try {
+      window.localStorage.setItem(MODE_KEY, next);
+    } catch {
+      // Storage unavailable; the mode still applies for this visit.
+    }
+  }, [mode, currentPageNumber, views]);
 
   // Commit the leaf's starting angle before moving it, or the browser collapses
   // both styles into one recalculation and nothing animates. Reading the
@@ -326,7 +553,10 @@ export default function BookViewer({
     // already says where you are, and the field is ready for the next jump.
     setJumpError("");
     setJumpValue("");
-    goToIndex(target);
+    // The validation above still asks viewIndexForPage, because a number with
+    // no frame has no page either -- but the move itself goes through goToPage
+    // so it lands in the column when that is what is showing.
+    goToPage(Number(raw));
   };
 
   // An empty diary is a reachable state -- a fresh project before the first
@@ -363,16 +593,93 @@ export default function BookViewer({
 
   const neighbours = [views[index - 1], views[index + 1]].filter(Boolean);
 
+  /*
+   * What the controls mean in each mode. Computed here so the JSX below reads
+   * the same in both -- Previous is Previous whether it turns a leaf or scrolls
+   * one page.
+   */
+  const scrolling = mode === "scroll";
+  const firstNumber = halves[0]?.pageNumber ?? null;
+  const lastNumber = halves[halves.length - 1]?.pageNumber ?? null;
+
+  const atFirst = scrolling
+    ? currentPageNumber != null && currentPageNumber <= firstNumber
+    : index === 0;
+  const atLast = scrolling
+    ? currentPageNumber != null && currentPageNumber >= lastNumber
+    : index === views.length - 1;
+
+  const stepBack = () => (scrolling ? scrollByPage("prev") : go("prev"));
+  const stepForward = () => (scrolling ? scrollByPage("next") : go("next"));
+
+  // The book names a frame ("Pages 3-4"); the column names one page.
+  const counterLabel = scrolling
+    ? `Page ${currentPageNumber ?? firstNumber ?? "-"}`
+    : current.label;
+
+  // Zoom opens the scan behind whatever is on screen. In the column that is the
+  // scan the current page belongs to, which for a spread is the same scan for
+  // both of its pages.
+  const zoomTarget = scrolling
+    ? (halves.find((half) => half.pageNumber === currentPageNumber)?.page ??
+      current.pages[0])
+    : current.pages[0];
+
   return (
     <div className="viewer">
       {renderToolbar && <div className="viewer__toolbar">{renderToolbar(current)}</div>}
 
+      {scrolling ? (
+        /*
+         * One page per item, in a container with its own scrollbar rather than
+         * the window's -- so the controls and the search box below stay put
+         * instead of scrolling away from the reader who is using them.
+         *
+         * An ordered list because that is what this is: the pages of a book in
+         * sequence. data-page-number is what the observer reads, and the inline
+         * aspect-ratio is what lets every item reserve its true height before a
+         * single byte of image arrives -- which is why the scrollbar is the
+         * right length immediately instead of growing as scans land.
+         */
+        <ol className="column" ref={columnRef}>
+          {halves.map((half) => (
+            <li
+              key={`${half.page.contentId}-${half.clip ?? "whole"}`}
+              className="column__item"
+              data-page-number={half.pageNumber}
+              style={{
+                aspectRatio: half.clip
+                  ? half.page.width / 2 / half.page.height
+                  : half.page.width / half.page.height,
+              }}
+            >
+              <ZoomableSlot
+                className="column__page"
+                half={half}
+                onOpen={setZoomed}
+                busy={false}
+                lazy
+              />
+            </li>
+          ))}
+        </ol>
+      ) : (
       <div className="book">
         {/* Only the static slots open the zoom. The turning leaf renders these
             same halves onto its faces during a flip, so a click target there
             would ride the animation. */}
-        <ZoomableSlot side="left" half={leftHalf} onOpen={setZoomed} busy={!!flip} />
-        <ZoomableSlot side="right" half={rightHalf} onOpen={setZoomed} busy={!!flip} />
+        <ZoomableSlot
+          className="slot slot--left"
+          half={leftHalf}
+          onOpen={setZoomed}
+          busy={!!flip}
+        />
+        <ZoomableSlot
+          className="slot slot--right"
+          half={rightHalf}
+          onOpen={setZoomed}
+          busy={!!flip}
+        />
 
         {flip && (
           <div
@@ -399,6 +706,7 @@ export default function BookViewer({
 
         <div className="spine" aria-hidden="true" />
       </div>
+      )}
 
       {/* The transcribed opening of whatever is on screen, set in the hand it
           was written in.
@@ -418,14 +726,14 @@ export default function BookViewer({
       )}
 
       <nav className="controls">
-        <button type="button" onClick={() => go("prev")} disabled={index === 0 || !!flip}>
+        <button type="button" onClick={stepBack} disabled={atFirst || !!flip}>
           &larr; Previous
         </button>
         {/* Counter and jump field are one flex child, so .controls keeps its
             three columns and Previous/Next stay pinned to the edges. */}
         <div className="controls__center">
           <span className="counter" aria-live="polite">
-            {current.label} <span className="counter__total">of {totalPages}</span>
+            {counterLabel} <span className="counter__total">of {totalPages}</span>
           </span>
 
           {/* noValidate, with min/max kept for the spinner and screen readers:
@@ -462,20 +770,29 @@ export default function BookViewer({
           </p>
         </div>
 
+        {/* aria-pressed rather than a label that only changes visually, the same
+            way the password reveal on the login form reports its state. */}
+        <button
+          type="button"
+          className="controls__mode"
+          onClick={toggleMode}
+          aria-pressed={scrolling}
+          disabled={!!flip}
+          title={scrolling ? "Read as a book, two pages a time" : "Scroll one page at a time"}
+        >
+          {scrolling ? "Book view" : "Scroll view"}
+        </button>
+
         <button
           type="button"
           className="controls__zoom"
-          onClick={() => setZoomed(current.pages[0])}
+          onClick={() => setZoomed(zoomTarget)}
           disabled={!!flip}
         >
           Zoom
         </button>
 
-        <button
-          type="button"
-          onClick={() => go("next")}
-          disabled={index === views.length - 1 || !!flip}
-        >
+        <button type="button" onClick={stepForward} disabled={atLast || !!flip}>
           Next &rarr;
         </button>
       </nav>
@@ -516,8 +833,8 @@ export default function BookViewer({
                         <button
                           type="button"
                           className="search__hit"
-                          disabled={!!flip || target === index}
-                          onClick={() => goToIndex(target)}
+                          disabled={!!flip || (!scrolling && target === index)}
+                          onClick={() => goToPage(page.pageId)}
                         >
                           <span className="search__span">{span}</span>
                           <HighlightedLine text={page.firstLine} query={query} />

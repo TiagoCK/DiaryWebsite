@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  buildHalves,
   buildViews,
   frameAspect,
   halfOf,
   initialViewIndex,
+  pageNumberOfHalf,
   totalPages,
   viewIndexForPage,
 } from "../src/lib/views.js";
@@ -171,5 +173,93 @@ describe("views: which frame to open on", () => {
       initialViewIndex(buildViews([]), { linkedPage: 1, rememberedPage: 1 }),
       { index: 0, source: "default" }
     );
+  });
+});
+
+describe("views: buildHalves", () => {
+  const numbers = (views) => buildHalves(views).map((h) => h.pageNumber);
+  const clips = (views) => buildHalves(views).map((h) => h.clip ?? "whole");
+
+  it("splits a spread into its two page numbers", () => {
+    const views = buildViews([spread(3)]);
+    assert.deepEqual(numbers(views), [3, 4]);
+    assert.deepEqual(clips(views), ["left", "right"]);
+  });
+
+  it("gives a paired view each scan's own number", () => {
+    // The case the one-rule page number has to get right: the right half here
+    // is a different scan, not the second half of one.
+    const views = buildViews([single(1), single(2)]);
+    assert.deepEqual(numbers(views), [1, 2]);
+    assert.deepEqual(clips(views), ["whole", "whole"]);
+  });
+
+  it("gives a trailing single one item, not a blank second", () => {
+    // The book shows a blank facing page. There is nothing to scroll to.
+    const views = buildViews([single(1), single(2), single(3)]);
+    assert.deepEqual(numbers(views), [1, 2, 3]);
+    assert.equal(buildHalves(views).length, 3);
+  });
+
+  it("is empty for an empty diary", () => {
+    assert.deepEqual(buildHalves(buildViews([])), []);
+  });
+
+  it("keeps reading order across mixed singles and spreads", () => {
+    const views = buildViews([single(1), single(2), spread(3), single(5)]);
+    assert.deepEqual(numbers(views), [1, 2, 3, 4, 5]);
+  });
+
+  /*
+   * The invariant the whole mode rests on: one item per physical page, so the
+   * column is exactly as long as the diary. If this ever fails, either a page
+   * is unreachable by scrolling or one is reachable twice.
+   */
+  it("produces exactly one item per physical page", () => {
+    for (const pages of [
+      diary(),
+      [single(1)],
+      [spread(1)],
+      [single(1), spread(2)],
+      [spread(1), single(3), single(4)],
+      [single(1), single(2), single(3)],
+    ]) {
+      const views = buildViews(pages);
+      assert.equal(
+        buildHalves(views).length,
+        totalPages(pages),
+        JSON.stringify(pages.map((p) => [p.pageId, p.pageCount]))
+      );
+    }
+  });
+
+  it("numbers every item uniquely and in ascending order", () => {
+    const ns = numbers(buildViews(diary()));
+    assert.deepEqual(ns, [...ns].sort((a, b) => a - b), "ascending");
+    assert.equal(new Set(ns).size, ns.length, "no number appears twice");
+  });
+
+  it("hands <Half> the same shape halfOf() does", () => {
+    // Not an incidental overlap -- it is why one component renders both modes.
+    const views = buildViews([spread(3)]);
+    const [first] = buildHalves(views);
+    const direct = halfOf(views[0], "left");
+    assert.equal(first.page, direct.page);
+    assert.equal(first.clip, direct.clip);
+  });
+});
+
+describe("views: pageNumberOfHalf", () => {
+  it("reads a clipped right half as the second number", () => {
+    assert.equal(pageNumberOfHalf({ page: spread(7), clip: "right" }), 8);
+  });
+
+  it("reads everything else as the scan's own number", () => {
+    assert.equal(pageNumberOfHalf({ page: spread(7), clip: "left" }), 7);
+    assert.equal(pageNumberOfHalf({ page: single(7), clip: null }), 7);
+  });
+
+  it("has no answer for a blank facing page", () => {
+    assert.equal(pageNumberOfHalf(null), null);
   });
 });
