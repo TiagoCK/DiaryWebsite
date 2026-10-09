@@ -100,7 +100,8 @@ function toDiary(row) {
     title: row.title,
     subtitle: row.subtitle ?? null,
     position: row.position ?? row.id,
-    // Absent on a database that has not run 0008 yet; default to readable so
+    // Absent on a database that has not run the diary-visibility migration
+    // yet; default to readable so
     // schema drift does not empty everyone's shelf.
     visibility: row.visibility ?? DEFAULT_VISIBILITY,
   };

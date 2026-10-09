@@ -34,7 +34,7 @@ export function slugify(title) {
  * Validate and normalise what the new-diary form submitted.
  *
  * Pure, so the rules can be tested without a database. The slug pattern matches
- * the CHECK constraint in 0007_diaries.sql exactly -- if these two ever
+ * the CHECK constraint in the diaries migration exactly -- if these two ever
  * disagree, the form accepts something Postgres then rejects with an error no
  * admin can act on.
  */
